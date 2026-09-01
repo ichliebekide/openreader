@@ -1,0 +1,17 @@
+{
+  "KPackageStructure": "KWin/Script",
+  "KPlugin": {
+    "Id": "openreader-context",
+    "Name": "OpenReader Context Bridge",
+    "Description": "Reports cursor position and focused window class to the local OpenReader service.",
+    "Version": "0.1.0",
+    "License": "Apache-2.0",
+    "Authors": [
+      {
+        "Name": "OpenReader contributors"
+      }
+    ]
+  },
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js"
+}

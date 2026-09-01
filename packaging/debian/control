@@ -1,0 +1,11 @@
+Package: openreader
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: OpenReader contributors <dev@openreader.local>
+Depends: ${misc:Depends}, ffmpeg, libwebkit2gtk-4.1-0, wl-clipboard, xdg-desktop-portal, xdg-desktop-portal-kde, tesseract-ocr, python3
+Recommends: piper
+Description: Wayland-first AI text-to-speech reader for Linux
+ OpenReader shows a small overlay when text is selected and reads it aloud
+ using local AI TTS engines.

@@ -1,0 +1,60 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "OpenReader",
+  "version": "0.1.0",
+  "identifier": "org.openreader.OpenReader",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenReader",
+        "url": "index.html",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 1040,
+        "minHeight": 660,
+        "decorations": false,
+        "transparent": false,
+        "visible": true
+      },
+      {
+        "label": "overlay",
+        "title": "OpenReader Overlay",
+        "url": "index.html#/overlay",
+        "width": 64,
+        "height": 64,
+        "minWidth": 64,
+        "minHeight": 64,
+        "maxWidth": 64,
+        "maxHeight": 64,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "resources": {
+      "../backend/openreader_backend": "backend/openreader_backend",
+      "../backend/pyproject.toml": "backend/pyproject.toml"
+    },
+    "category": "Utility",
+    "shortDescription": "Wayland-first AI TTS reader",
+    "longDescription": "OpenReader reads selected text aloud on Linux using a Wayland-first desktop architecture."
+  }
+}

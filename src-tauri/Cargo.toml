@@ -1,0 +1,25 @@
+[package]
+name = "openreader"
+version = "0.1.0"
+description = "Wayland-first AI text-to-speech reader for Linux."
+authors = ["OpenReader contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/openreader/openreader"
+edition = "2021"
+rust-version = "1.77"
+default-run = "openreader"
+
+[lib]
+name = "openreader_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
