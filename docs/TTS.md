@@ -42,6 +42,12 @@ dekodiert und ueber den bestehenden `pw-cat`/PipeWire-Pfad wiedergegeben. Tempo,
 Lautstaerke, Stoppen und der Schutz vor paralleler Wiedergabe laufen damit ueber
 dieselben zentralen OpenReader-Komponenten wie bei Piper.
 
+Eine Vorleseanfrage behaelt denselben PipeWire-Stream ueber alle Textabschnitte
+offen. Seraphina uebergibt dabei den vollstaendigen Text pro Edge-Anfrage, sodass
+zwischen normalen Abschnitten kein Verbindungs- oder Player-Neustart entsteht.
+Der Player sammelt keine Audio-Chunks vorab: Jeder von `ffmpeg` gelieferte
+PCM-Chunk wird unmittelbar an PipeWire weitergereicht.
+
 ## Piper
 
 Einrichten:

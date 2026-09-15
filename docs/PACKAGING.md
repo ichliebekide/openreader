@@ -31,6 +31,8 @@ Runtime:
 - `xdg-desktop-portal-kde`
 - `tesseract-ocr`
 - `python3`
+- `libkf6config-bin` (KWin-Fokusregel lesen und schreiben)
+- `qdbus-qt6` (KWin-Regel laden)
 
 Empfohlen:
 
@@ -60,3 +62,9 @@ Für Kubuntu-first ist Weg 1 für frühe Releases einfacher. Für AppImage sollt
 ```
 
 Das installiert `integrations/kwin/openreader-context` als KWin Script und aktiviert es in `kwinrc`.
+
+Beim Start unter KDE installiert OpenReader zusaetzlich automatisch eine eigene
+Fensterregel `openreader-overlay-no-focus` in der Benutzerdatei `kwinrulesrc`.
+Sie verweigert nur dem Vorlesesymbol den Tastaturfokus. Die beiden KDE-Werkzeuge
+oben muessen auch fuer AppImage auf dem Host installiert sein. Ohne erfolgreichen
+Regel-Setup wird das Overlay nicht eingeblendet; der Start meldet den Fehler.

@@ -409,39 +409,38 @@ h2 {
   border-radius: 50%;
   color: #0f172a;
   background: rgba(139, 233, 201, 0.88);
-  box-shadow:
-    0 14px 40px rgba(0, 0, 0, 0.36),
-    0 0 0 1px rgba(255, 255, 255, 0.32) inset;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.32) inset;
   backdrop-filter: blur(14px);
   cursor: pointer;
   animation: bubble-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .overlay-bubble:hover {
-  transform: scale(1.05);
   background: rgba(164, 244, 219, 0.94);
 }
 
 .overlay-bubble.busy {
-  animation: pulse 900ms ease-in-out infinite;
+  animation: bubble-busy 900ms ease-in-out infinite;
 }
 
 .overlay-bubble.hidden {
   opacity: 0;
   pointer-events: none;
-  transform: scale(0.82);
   animation: none;
 }
 
 @keyframes bubble-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.86);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
+}
+
+@keyframes bubble-busy {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
 }
 
 @keyframes pulse {

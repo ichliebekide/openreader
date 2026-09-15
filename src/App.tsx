@@ -374,22 +374,6 @@ function MainApp() {
               </select>
             </label>
 
-            <label className="field">
-              <span>Sprache</span>
-              <select
-                value={selectedProfile?.language ?? "German"}
-                onChange={(event) =>
-                  updateSelectedProfile((profile) => ({
-                    ...profile,
-                    language: event.target.value
-                  }))
-                }
-              >
-                <option value="German">Deutsch</option>
-                <option value="English">Englisch</option>
-              </select>
-            </label>
-
             <div className="range-grid">
               <label className="field range-field">
                 <span>Tempo</span>

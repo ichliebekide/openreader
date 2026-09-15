@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-import logging
-from io import BytesIO
 import importlib.util
-from pathlib import Path
+import logging
 import shutil
+from collections.abc import AsyncIterator
+from io import BytesIO
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 from ..models import ReaderSettings, TTSEngine, TTSEngineStatus, TTSStatusResponse, VoiceProfile
-from ..utils.text import split_sentences
+from ..utils.text import normalize_selection, split_sentences
+from .base import AudioChunk
 from .engines.cosyvoice_engine import CosyVoiceEngine
 from .engines.edge_engine import EdgeEngine
 from .engines.mock_engine import MockEngine
@@ -35,12 +37,11 @@ class TTSOrchestrator:
 
     async def speak(self, text: str, profile_id: str | None = None) -> None:
         profile = self._profile(profile_id)
-        for sentence in self._split_for_profile(text, profile):
-            try:
-                await self._speak_sentence(sentence, profile)
-            except Exception:
-                logger.exception("All TTS engines failed for sentence")
-                raise
+        try:
+            await self.player.play_stream(self._synthesize_sections(text, profile))
+        except Exception:
+            logger.exception("All TTS engines failed during playback")
+            raise
 
     async def stop(self) -> None:
         await self.player.stop()
@@ -98,18 +99,24 @@ class TTSOrchestrator:
 
         return VoiceProfile(engine=self.settings.backend_engine)
 
-    async def _speak_sentence(self, sentence: str, preferred_profile: VoiceProfile) -> None:
-        last_error: Exception | None = None
-        for profile in self._candidate_profiles(preferred_profile):
-            try:
-                await self.player.play_stream(self.engines[profile.engine].synthesize(sentence, profile))
-                return
-            except Exception as error:
-                last_error = error
-                logger.exception("TTS engine %s failed; trying fallback", profile.engine)
-
-        if last_error:
-            raise last_error
+    async def _synthesize_sections(
+        self,
+        text: str,
+        preferred_profile: VoiceProfile,
+    ) -> AsyncIterator[AudioChunk]:
+        for section in self._split_for_profile(text, preferred_profile):
+            last_error: Exception | None = None
+            for profile in self._candidate_profiles(preferred_profile):
+                try:
+                    async for chunk in self.engines[profile.engine].synthesize(section, profile):
+                        yield chunk
+                    break
+                except Exception as error:
+                    last_error = error
+                    logger.exception("TTS engine %s failed; trying fallback", profile.engine)
+            else:
+                if last_error:
+                    raise last_error
 
     def _candidate_profiles(self, preferred_profile: VoiceProfile) -> list[VoiceProfile]:
         profiles = [preferred_profile]
@@ -134,12 +141,14 @@ class TTSOrchestrator:
 
     @staticmethod
     def _split_for_profile(text: str, profile: VoiceProfile) -> list[str]:
+        if profile.engine == TTSEngine.EDGE:
+            clean = normalize_selection(text)
+            return [clean] if clean else []
+
         if profile.engine == TTSEngine.QWEN:
             max_chars = 180
         elif profile.engine == TTSEngine.COSYVOICE:
             max_chars = 220
-        elif profile.engine == TTSEngine.EDGE:
-            max_chars = 300
         else:
             max_chars = 420
         return split_sentences(text, max_chars=max_chars)
@@ -177,7 +186,9 @@ class TTSOrchestrator:
         )
 
     def _first_profile(self, engine: TTSEngine) -> VoiceProfile | None:
-        return next((profile for profile in self.settings.voice_profiles if profile.engine == engine), None)
+        return next(
+            (profile for profile in self.settings.voice_profiles if profile.engine == engine), None
+        )
 
     @staticmethod
     def _edge_status(profile: VoiceProfile | None) -> TTSEngineStatus:
@@ -210,7 +221,9 @@ class TTSOrchestrator:
         if not installed:
             detail = "torch/qwen_tts not installed; run `pip install -e backend[qwen]`"
         elif not sox_ok:
-            detail = "qwen-tts is installed, but system `sox` is missing; run `sudo apt install sox`"
+            detail = (
+                "qwen-tts is installed, but system `sox` is missing; run `sudo apt install sox`"
+            )
         elif not configured:
             detail = "Reference audio and reference text are required for the Base model"
         else:
@@ -232,7 +245,9 @@ class TTSOrchestrator:
             except Exception:
                 cli_ok = False
 
-        model_ok = bool(profile and profile.cosyvoice_model_path and profile.cosyvoice_model_path.exists())
+        model_ok = bool(
+            profile and profile.cosyvoice_model_path and profile.cosyvoice_model_path.exists()
+        )
         prompt_ok = bool(
             profile
             and profile.cosyvoice_prompt_speech_path
@@ -265,9 +280,7 @@ class TTSOrchestrator:
 
         model_ok = bool(profile and profile.piper_model_path and profile.piper_model_path.exists())
         config_ok = bool(
-            profile
-            and profile.piper_config_path
-            and profile.piper_config_path.exists()
+            profile and profile.piper_config_path and profile.piper_config_path.exists()
         )
         if not command_ok:
             detail = "Piper CLI not found; run `./scripts/setup-tts.sh --piper`"

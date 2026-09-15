@@ -49,7 +49,33 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 
 ## Overlay-Lebenszyklus
 
-- Das Overlay ist ein eigenes transparentes 64x64-Tauri-Fenster.
+- Das Overlay ist ein eigenes transparentes 56x56-Tauri-Fenster, passend zum
+  runden CSS-Symbol. Groesse, Mindest- und Hoechstgroesse bleiben identisch.
+- `overlay_input::configure` setzt vor dem ersten Einblenden auch die native
+  GTK-Standard-/Anforderungsgroesse. Allein die Tauri-Konfiguration ergab
+  auf diesem System ein tatsaechliches 200x200-Fenster.
+- `overlay_input::set_enabled` setzt auf dem GTK-Hauptthread eine kreisfoermige
+  Cairo-Eingaberegion in logischen Pixeln. Transparente Ecken bleiben fuer
+  darunterliegende Fenster durchlaessig. Eine deaktivierte oder bereits
+  versteckte Flaeche bekommt eine leere Region. Nicht zur rechteckigen
+  Freigabe mit `set_ignore_cursor_events(false)` zurueckwechseln.
+- Overlay-Animationen veraendern nur die Deckkraft, nicht Groesse oder
+  Position; es gibt keinen grossflaechigen Aussenschatten.
+- Das Overlay muss bereits bei der Fenstererzeugung mit `focusable: false`
+  konfiguriert sein. Rust setzt `set_focusable(false)` zusaetzlich vor jedem
+  `show()`. Das allein verhindert unter GTK 3/Wayland keinen Fokuswechsel:
+  GDK implementiert dort `set_accept_focus` und `set_focus_on_map` nicht.
+- Auf KDE richtet `src-tauri/src/overlay_focus.rs` vor dem ersten Overlay-Map
+  die KWin-Regel `openreader-overlay-no-focus` in `kwinrulesrc` ein.
+  `acceptfocus=false` mit `acceptfocusrule=2` erzwingt den Fokusausschluss.
+  Klasse und Titel muessen beide passen; das Hauptfenster ist ausgenommen.
+  Die Typmaske ist `4294967295` (alle Typen), nicht `0` (keine Typen).
+- Die Registrierung ist idempotent und erhaelt fremde Regelgruppen. Aenderungen
+  werden mit `kreadconfig6`/`kwriteconfig6` geschrieben und durch KWin geladen.
+  Bei fehlenden Werkzeugen oder Schreibfehlern bricht der Start mit einer
+  Fehlermeldung ab, bevor das Overlay sichtbar wird. Es gibt keine Schleife,
+  die den Fokus nachtraeglich zuruecksetzt.
+- Titel und Position werden ebenfalls vor `show()` vorbereitet.
 - Unter KDE positioniert KWin das Fenster. Tauri darf dort keine konkurrierende
   physische Position setzen.
 - Das Fenster wird vor `set_ignore_cursor_events` einmal realisiert, um einen
@@ -58,12 +84,22 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
   Animation und Interaktionszustand.
 - Ein Sequenzzaehler verhindert, dass der Timeout einer alten Auswahl ein neues
   Overlay versteckt.
+- Live-Regressionstest: `/usr/bin/python3 scripts/check-overlay-focus.py`.
+  Benoetigt laufendes OpenReader, KDE/Wayland, `python3-gi`, GTK 3 und
+  `python3-dbus`. Oeffnet fuer 15 Sekunden ein Test-Eingabefeld und setzt echte
+  PRIMARY-Auswahlen. Erfasst GTK-Fokusverluste und KWin-Aktivierungen ueber den
+  gesamten Ablauf, einschliesslich Timeout und erneutem Einblenden. Prueft
+  ausserdem die tatsaechliche KWin-Fenstergroesse auf 56x56. Eine echte
+  Doppelklick-/Tastaturbedienung bleibt ein zusaetzlicher manueller Test.
 
 ## Frontend Settings State
 
 - `ReaderSettings.active_profile_id` und `backend_engine` sind die einzige
   Quelle fuer aktive Engine und Stimme; kein zweiter lokaler Profil-State.
 - Das Voice-Profile-Menue zeigt nur Profile der aktiven Engine.
+- Die Sprache ist Bestandteil des Voice-Profils und wird nicht als separater
+  UI-Selector angeboten. Sprachwechsel erfolgen durch die Wahl eines passenden
+  Profils, damit keine ungueltigen Engine-/Stimmenkombinationen entstehen.
 - Vollstaendige Settings-Snapshots werden kurz zusammengefasst und seriell an
   das Backend gesendet. Eine aeltere Antwort darf neueren optimistischen State
   nicht ueberschreiben.
@@ -100,6 +136,15 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 - Der Microsoft-MP3-Stream wird mit `ffmpeg` fortlaufend zu 24-kHz-`raw_s16le`
   dekodiert und danach wie Piper ueber `pw-cat` abgespielt.
 - Piper streamt `raw_s16le` an `pw-cat`/PipeWire.
+- Eine komplette Vorleseanfrage verwendet genau einen `AudioPlayer`-Stream.
+  Textabschnitte derselben PCM-Rate duerfen `pw-cat` nicht schliessen; ein
+  Neustart ist nur bei geaenderter Sample-Rate oder Kanalzahl erlaubt.
+- Der Player besitzt keinen vorgeschalteten Audio- oder Vorlaufpuffer. Jeder
+  empfangene PCM-Chunk wird direkt an den offenen PipeWire-Prozess geschrieben;
+  dessen `drain()` gibt den Takt fuer die weitere Synthese vor.
+- Microsoft Natural erhaelt den vollstaendigen normalisierten Text in einer
+  Anfrage. OpenReader setzt fuer dieses Profil keine maximale Zeichenanzahl und
+  keine interne 5000-Zeichen-Aufteilung mehr.
 - Nach normalem EOF darf PipeWire bis zu 10 Sekunden gepuffertes Audio leeren.
 - Ein explizites Stoppen soll weiterhin schnell reagieren und verwendet deshalb
   den kurzen Terminate-Pfad.

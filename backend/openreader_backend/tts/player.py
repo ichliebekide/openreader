@@ -21,26 +21,40 @@ class AudioPlayer:
 
     async def play_stream(self, chunks: AsyncIterator[AudioChunk]) -> None:
         raw_process: asyncio.subprocess.Process | None = None
+        raw_format: tuple[int, int] | None = None
         cancelled = False
+
+        async def close_raw_process(*, terminate: bool = False) -> None:
+            nonlocal raw_process, raw_format
+            if raw_process is None:
+                return
+            await self._close_raw_process(raw_process, terminate=terminate)
+            if self._raw_process is raw_process:
+                self._raw_process = None
+            raw_process = None
+            raw_format = None
+
         try:
             async for chunk in chunks:
                 if chunk.encoding == "raw_s16le":
+                    chunk_format = (chunk.sample_rate, chunk.channels)
+                    if raw_process is not None and raw_format != chunk_format:
+                        await close_raw_process()
                     if raw_process is None:
                         raw_process = await self._open_raw_pipewire_stream(chunk)
                         self._raw_process = raw_process
+                        raw_format = chunk_format
                     assert raw_process.stdin is not None
                     raw_process.stdin.write(chunk.data)
                     await raw_process.stdin.drain()
                 else:
+                    await close_raw_process()
                     await self.play(chunk)
         except asyncio.CancelledError:
             cancelled = True
             raise
         finally:
-            if raw_process is not None:
-                await self._close_raw_process(raw_process, terminate=cancelled)
-                if self._raw_process is raw_process:
-                    self._raw_process = None
+            await close_raw_process(terminate=cancelled)
 
     async def stop(self) -> None:
         if self._raw_process is not None:

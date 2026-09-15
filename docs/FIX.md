@@ -16,6 +16,157 @@ chronologisch ergaenzt.
 - Betroffene Dateien:
 ```
 
+## 2026-09-15 - Zu grosser unsichtbarer Bereich um das Vorlesesymbol
+
+- Symptom: Um das runde Vorlesesymbol lag eine unnoetig grosse Fenster- und
+  Eingabeflaeche.
+- Ursache: Das Symbol war 56x56, das konfigurierte Fenster 64x64 Pixel gross.
+  Tatsaechlich meldete KWin sogar 200x200: GTK uebernahm die vor der
+  Realisierung gesetzte Tauri/Tao-Groesse beim nicht skalierbaren Fenster
+  nicht. Die bisherige Eingabefreigabe aktivierte das gesamte Rechteck.
+- Aenderung: Tauri-Groesse und native GTK-Standard-/Anforderungsgroesse vor dem
+  ersten Einblenden auf 56x56 logische Pixel gesetzt. GTK erhaelt beim
+  Aktivieren eine kreisfoermige Cairo-Eingaberegion; transparente Ecken
+  gehoeren nicht zum Klickbereich. Versteckte Fenster erhalten eine leere
+  Region. Grosser CSS-Schatten und vergroessernde/verschiebende Animationen
+  wurden durch eine Innenkontur und reine Deckkraftanimationen ersetzt.
+- Verifikation: Beide Rust-Tests und `npm run build` bestanden. Der
+  Eingaberegion-Test prueft jeden Pixel einschliesslich Rand und Ecken.
+  Der erweiterte Live-Test erkannte zunaechst 200x200 und bestaetigte nach
+  der GTK-Korrektur durchgehend 56x56 bei zwei Overlay-Maps. Null
+  Fokusverluste, null Overlay-Aktivierungen; Hauptfenster weiter fokussierbar.
+  Physische Klicks durch die transparenten Ecken wurden nicht automatisiert.
+  OpenReader wurde mit dem Fix neu gestartet.
+- Betroffene Dateien: `src-tauri/src/overlay_input.rs`, `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `src-tauri/tauri.conf.json`,
+  `src/styles.css`, `scripts/check-overlay-focus.py`,
+  `scripts/check-overlay-focus.js`, `docs/NOTES.md`
+
+## 2026-09-15 - Tastaturfokus nach Doppelklick-Markierung verloren
+
+- Symptom: Das Vorlesesymbol unterbrach nach einer Textauswahl per Doppelklick
+  das anschliessende Tippen oder Loeschen im Quellfenster.
+- Ursache: Tauri/Tao delegiert `focusable=false` an GTK 3 `accept_focus`.
+  Im GDK-Wayland-Backend sind `set_accept_focus` und `set_focus_on_map` leere
+  Funktionen. Der Fix vom 2026-09-01 konnte daher keinen Fokusausschluss
+  garantieren; reine Vorher/Nachher-Snapshots erkennen kurze Wechsel nicht.
+- Aenderung: Beim KDE-Start wird vor dem ersten Overlay-Map eine eng auf
+  OpenReader-Klasse und Overlay-Titel begrenzte KWin-Regel registriert.
+  `acceptfocus=false`, erzwungen mit Regeltyp `2`, verweigert dem Symbol den
+  Tastaturfokus direkt in KWin. Das Hauptfenster bleibt fokussierbar. Vorhandene
+  fremde Regeln bleiben erhalten; die eigene Regel wird nur einmal registriert.
+  KDE-Abhaengigkeiten wurden in beiden Debian-Konfigurationen ergaenzt.
+- Verifikation: `cargo test` und Frontend-Build bestanden. Der neue GTK/KWin-
+  Live-Test registriert alle Aktivierungen und Fokusverluste waehrend echter
+  PRIMARY-Auswahlen, Timeout und erneutem Einblenden. Er erkannte zuerst zwei
+  Fokusverluste, weil die initiale Regel-Typmaske `0` kein Fenster erfasste.
+  Nach Korrektur auf `4294967295`: zwei Overlay-Maps, vier Beobachtungen,
+  `wantsInput=false`, null Overlay-Aktivierungen, null GTK-Fokusverluste;
+  Quellfenster blieb fokussiert und Hauptfenster fokussierbar. Physische
+  Doppelklick-/Tastatureingaben wurden nicht automatisiert. OpenReader wurde
+  mit dem Fix neu gestartet. Ein verwaistes Backend (PID 13796) aus einer
+  frueheren Terminal-Sitzung wurde beendet; es reagierte nicht auf SIGTERM
+  und musste anschliessend gezielt per SIGKILL beendet werden.
+- Betroffene Dateien: `src-tauri/src/overlay_focus.rs`, `src-tauri/src/main.rs`,
+  `src-tauri/tauri.conf.json`, `packaging/debian/control`,
+  `scripts/check-overlay-focus.py`, `scripts/check-overlay-focus.js`,
+  `docs/NOTES.md`, `docs/PACKAGING.md`
+- Quellen: [GTK 3 Wayland-Backend](https://github.com/GNOME/gtk/blob/gtk-3-24/gdk/wayland/gdkwindow-wayland.c),
+  [KWin XdgToplevelWindow::wantsInput](https://github.com/KDE/kwin/blob/master/src/xdgshellwindow.cpp),
+  [KWin Regeltypen](https://github.com/KDE/kwin/blob/master/src/rules.h).
+
+## 2026-09-02 - Zeichenlimit und Audio-Vorlaufpuffer entfernt
+
+- Symptom: Microsoft Seraphina teilte sehr lange Texte intern bei einer festen
+  Zeichenanzahl auf. Der Player sammelte ausserdem vor dem Wiedergabestart PCM-
+  Daten und synthetisierte weitere Chunks voraus.
+- Ursache: Fuer Edge-TTS war eine feste Abschnittsgroesse konfiguriert. Im
+  Player entkoppelten eine Producer-Queue mit 128 Plaetzen und ein 48000-Byte-
+  Vorlauf Synthese und PipeWire-Wiedergabe.
+- Aenderung: Seraphina erhaelt nun den vollstaendigen normalisierten Text ohne
+  OpenReader-Zeichenlimit in einer Anfrage. Queue, Semaphore und PCM-Vorlauf
+  wurden entfernt; jeder Audio-Chunk wird direkt an den offenen PipeWire-
+  Prozess geschrieben. Die abschnittsweise Synthese lokaler Engines bleibt
+  bestehen, begrenzt aber nicht die Gesamtlaenge des Textes.
+- Verifikation: Der Regressionstest uebergibt einen Text mit deutlich mehr als
+  5000 Zeichen unveraendert als eine Edge-Anfrage. Ein Backpressure-Test
+  bestaetigt, dass bei blockiertem PipeWire-`drain()` kein zweiter Chunk
+  vorproduziert wird. Alle gezielten TTS-Tests bestanden.
+- Betroffene Dateien: `backend/openreader_backend/tts/orchestrator.py`,
+  `backend/openreader_backend/tts/player.py`,
+  `backend/tests/test_tts_continuity.py`, `docs/NOTES.md`, `docs/TTS.md`
+
+## 2026-09-01 - Overlay stahl beim Einblenden den Fensterfokus
+
+- Status: Unzureichender Zwischenfix. GTK 3 ignoriert diesen Hinweis unter
+  Wayland. Der Vorher/Nachher-Vergleich konnte kurze Fokuswechsel uebersehen;
+  siehe den KWin-Regelfix vom 2026-09-15.
+- Symptom: Beim Markieren von Text verlor das aktive Quellfenster den Fokus,
+  sobald das Vorlesesymbol erschien.
+- Ursache: `show_overlay` blendete das Tauri-Fenster ein, bevor
+  `set_focusable(false)` ausgefuehrt wurde. Die bestehende Einstellung
+  `focus: false` verhinderte nur den anfaenglich angeforderten Fokus, machte
+  das Fenster aber nicht dauerhaft unfokussierbar.
+- Aenderung: Das Overlay ist nun bereits in der Tauri-Konfiguration mit
+  `focusable: false` definiert. Rust setzt die Eigenschaft nochmals vor
+  Titel, Positionierung und `show()`, sodass das Fenster nie fokussierbar
+  sichtbar wird.
+- Verifikation: Im kontrollierten PRIMARY-Selection-Test blieb die aktive
+  Fensterklasse vor und nach dem Erscheinen des Overlays unveraendert
+  `Chatgpt`; zuvor wechselte sie dabei reproduzierbar zu `openreader`.
+  `cargo fmt --check`, `cargo check` und der Frontend-Produktions-Build waren
+  erfolgreich. Der neu gestartete Dev-Dienst meldete einen gesunden Backend-
+  Status.
+- Betroffene Dateien: `src-tauri/src/main.rs`, `src-tauri/tauri.conf.json`,
+  `docs/NOTES.md`
+
+## 2026-09-01 - Redundante Sprachauswahl im Voice-Profil
+
+- Symptom: Unter dem Profil `Microsoft Seraphina` erschien zusaetzlich ein
+  Sprachmenue mit `Deutsch` und `Englisch`, obwohl die Sprache bereits durch das
+  ausgewaehlte Voice-Profil festgelegt ist.
+- Ursache: Das Frontend stellte `VoiceProfile.language` als frei kombinierbares
+  Select dar, obwohl nicht jede Engine jede Kombination aus Profil und Sprache
+  unterstuetzt.
+- Aenderung: Der sichtbare Sprach-Selector wurde entfernt. Die Sprache bleibt
+  intern Bestandteil des Profils und wird weiterhin an die TTS-Engine gegeben.
+- Verifikation: Frontend-Typecheck und Produktions-Build erfolgreich; das
+  Settings-Panel zeigt nach `Voice Profile` direkt Tempo und Lautstaerke.
+- Betroffene Dateien: `src/App.tsx`, `docs/NOTES.md`
+
+## 2026-09-01 - Kurze Unterbrechungen zwischen langen TTS-Abschnitten
+
+- Status: Die gemeinsame PipeWire-Verbindung bleibt aktuell; der damals
+  eingefuehrte Producer- und Startpuffer wurde am 2026-09-02 auf Nutzerwunsch
+  wieder entfernt.
+
+- Symptom: Laengere Texte hatten bei Piper und Microsoft Seraphina zwischen
+  zwei Abschnitten eine kurze hoerbare Pause und wurden danach fortgesetzt.
+- Ursache: Der Orchestrator rief fuer jeden Textabschnitt separat
+  `AudioPlayer.play_stream` auf. Dadurch wurde `pw-cat` nach jedem Abschnitt
+  geschlossen und vollstaendig geleert; erst danach starteten Synthese und
+  Player fuer den naechsten Abschnitt erneut. Bei Online-TTS konnten
+  zusaetzlich schwankende Lieferabstaende den kleinen PipeWire-Puffer leeren.
+- Aenderung: Alle Abschnitte einer Vorleseanfrage werden als ein gemeinsamer
+  asynchroner Audiostream an genau einen Player-Aufruf geliefert. `pw-cat`
+  bleibt bei gleicher Sample-Rate und Kanalzahl offen und wird nur bei einem
+  echten Formatwechsel neu gestartet. Seraphina behaelt normale lange Texte bis
+  5000 Zeichen in einer Edge-Anfrage, waehrend Piper seine kleineren Abschnitte
+  ohne Player-Neustart aneinanderhaengt. Ein auf 128 Chunks begrenzter
+  Producer-Puffer synthetisiert bis etwa 1 MiB voraus; vor Wiedergabestart werden
+  mindestens 48000 PCM-Bytes gesammelt.
+- Verifikation: 8 Backendtests bestanden. Die Regressionstests erzeugten mehrere
+  Piper-Abschnitte mit genau einem Player-Aufruf und einem wiederverwendeten
+  Raw-Prozess; ein blockierter Fake-PipeWire-Writer bestaetigte, dass die
+  Synthese parallel vorauslaeuft. Ein echter 840-Zeichen-Seraphina-Test blieb
+  eine Edge-Anfrage und erzeugte 2632320 PCM-Bytes. Nach dem Live-Neustart
+  beendete Stoppen die gepufferte Wiedergabe mit `speaking=false`; weder
+  `ffmpeg` noch `pw-cat` blieben zurueck. Frontend-Build und Rust-Check waren
+  erfolgreich.
+- Betroffene Dateien: `backend/openreader_backend/tts/orchestrator.py`,
+  `backend/openreader_backend/tts/player.py`,
+  `backend/tests/test_tts_continuity.py`, `docs/NOTES.md`, `docs/TTS.md`
+
 ## 2026-09-01 - Microsoft Seraphina als Linux-Streaming-Engine
 
 - Symptom: Die gewuenschte Azure-Stimme

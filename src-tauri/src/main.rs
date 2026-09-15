@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(target_os = "linux")]
+mod overlay_focus;
+#[cfg(target_os = "linux")]
+mod overlay_input;
+#[cfg(target_os = "linux")]
 mod selection_wayland;
 
 use std::{
@@ -50,19 +54,19 @@ fn show_overlay(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), String> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()
         .to_lowercase();
+    window
+        .set_focusable(false)
+        .map_err(|error| error.to_string())?;
+    let sequence = OVERLAY_POSITION_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    window
+        .set_title(&format!("OpenReader Overlay:{x}:{y}:{sequence}"))
+        .map_err(|error| error.to_string())?;
     if !desktop.contains("kde") {
         window
             .set_position(Position::Physical(PhysicalPosition { x, y }))
             .map_err(|error| error.to_string())?;
     }
     window.show().map_err(|error| error.to_string())?;
-    let sequence = OVERLAY_POSITION_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
-    window
-        .set_title(&format!("OpenReader Overlay:{x}:{y}:{sequence}"))
-        .map_err(|error| error.to_string())?;
-    window
-        .set_focusable(false)
-        .map_err(|error| error.to_string())?;
     window
         .emit("overlay-visibility", true)
         .map_err(|error| error.to_string())?;
@@ -94,6 +98,9 @@ fn set_overlay_input(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
     window
         .set_focusable(false)
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
+    return overlay_input::set_enabled(window, enabled);
+    #[cfg(not(target_os = "linux"))]
     window
         .set_ignore_cursor_events(!enabled)
         .map_err(|error| error.to_string())
@@ -136,6 +143,8 @@ fn main() {
             set_overlay_input
         ])
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            overlay_focus::ensure_kde_rule().map_err(std::io::Error::other)?;
             let child = spawn_backend(app.handle()).ok();
             app.manage(BackendProcess(Mutex::new(child)));
             configure_overlay(app.get_webview_window("overlay"));
@@ -178,6 +187,8 @@ fn configure_overlay(window: Option<WebviewWindow>) {
     let _ = window.set_skip_taskbar(true);
     let _ = window.set_always_on_top(true);
     let _ = window.set_focusable(false);
+    #[cfg(target_os = "linux")]
+    overlay_input::configure(&window);
     let _ = window.show();
     // Tao's Linux backend requires a realized GDK window before changing its input region.
     let _ = window.set_ignore_cursor_events(true);

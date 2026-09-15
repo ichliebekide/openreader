@@ -27,19 +27,21 @@
         "label": "overlay",
         "title": "OpenReader Overlay",
         "url": "index.html#/overlay",
-        "width": 64,
-        "height": 64,
-        "minWidth": 64,
-        "minHeight": 64,
-        "maxWidth": 64,
-        "maxHeight": 64,
+        "width": 56,
+        "height": 56,
+        "minWidth": 56,
+        "minHeight": 56,
+        "maxWidth": 56,
+        "maxHeight": 56,
+        "shadow": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
-        "focus": false
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {
@@ -49,6 +51,11 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage"],
+    "linux": {
+      "deb": {
+        "depends": ["libkf6config-bin", "qdbus-qt6"]
+      }
+    },
     "resources": {
       "../backend/openreader_backend": "backend/openreader_backend",
       "../backend/pyproject.toml": "backend/pyproject.toml"
