@@ -4,7 +4,7 @@ import html
 import re
 
 WHITESPACE_RE = re.compile(r"\s+")
-SENTENCE_RE = re.compile(r"[^.!?。！？]+[.!?。！？]?")
+SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?。！？])(?:["\u201c\u201d\u00bb\u2019\')\]]*)\s+')
 UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})")
 
 
@@ -36,14 +36,23 @@ def preview(text: str, max_chars: int = 520) -> str:
 
 
 def split_sentences(text: str, max_chars: int = 420) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
     clean = normalize_selection(text)
     if not clean:
         return []
 
     sentences: list[str] = []
     buffer = ""
-    for match in SENTENCE_RE.finditer(clean):
-        part = match.group(0).strip()
+    # Slice the original text instead of dropping punctuation or splitting decimals.
+    start = 0
+    parts: list[str] = []
+    for match in SENTENCE_BOUNDARY_RE.finditer(clean):
+        end = match.end()
+        parts.append(clean[start:end].strip())
+        start = end
+    parts.append(clean[start:])
+    for part in parts:
         if not part:
             continue
 
@@ -69,6 +78,8 @@ def split_sentences(text: str, max_chars: int = 420) -> list[str]:
 
 
 def split_long_text(text: str, max_chars: int) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
     chunks: list[str] = []
     buffer = ""
 

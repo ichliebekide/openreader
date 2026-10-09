@@ -4,6 +4,57 @@ Diese Datei sammelt dauerhafte technische Entscheidungen, Betriebswissen und
 bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 [`FIX.md`](FIX.md).
 
+## 2026-10-08 - Nur noch Piper und Seraphina
+
+- Aktive Engines: `piper` und `edge`. Der API-Schluessel `edge` bleibt fuer
+  bestehende Seraphina-Profile kompatibel; die GUI nennt die Stimme Seraphina.
+- Neue Installationen und entfernte lokale Engines starten mit Piper.
+  Bestehende Piper-/Seraphina-Auswahl bleibt erhalten. Seraphina wird nicht
+  automatisch als Online-Fallback fuer Piper verwendet.
+- `SettingsStore` migriert alte Engine-Profile vor der Validierung im Speicher.
+  Erst normales Speichern schreibt das bereinigte Format. Keine automatische
+  Loeschung heruntergeladener Modelle oder Deinstallation aus der Venv.
+- Kein Mock-Audiogenerator im Produkt. Deterministische Test-Engines liegen
+  ausschliesslich in Tests bzw. im isolierten UI-Testprozess.
+- Aeltere Abschnitte zu Qwen/CosyVoice in diesem Log und im MWS-Analysebericht
+  dokumentieren den damaligen Stand, nicht den aktuellen Funktionsumfang.
+
+## 2026-10-08 - Audio-Uhr und Lesefortschritt
+
+- Ergaenzt die fruehere Entscheidung fuer einen gemeinsamen `pw-cat`-Pfad:
+  lokale Engines bleiben dort; Microsoft/Seraphina verwendet im App-Backend
+  `ClockedAudioPlayer`. Sounddevice war bereits Python-Abhaengigkeit,
+  `libportaudio2` und `pipewire-alsa` sind nun explizite Linux-Abhaengigkeiten.
+- Der neue Player besitzt seinen Callbackstream, eine auf 12 x 20 ms begrenzte
+  PCM-Queue und eine DAC-Zeitachse. Kein blockierendes `sd.play` in einem
+  unkontrollierbaren Thread. Stop schliesst Stream und Synthesegenerator.
+  Pause entnimmt keine Sprachsamples; schon ausgegebenes Audio kann auslaufen.
+- Die Queue ist nur der eigene Ausgabepuffer, nicht die Summe aus Decoder-,
+  Pipe- und Treiberpuffern. Kein Prefetch des gesamten Textes, keine neue
+  Mindestfuellzeit und kein globales Zeichenlimit. Netz-/Syntheseunterversorgung
+  kann weiterhin hoerbare Pausen verursachen.
+- `WordBoundary` enthaelt UTF-16-Start/Ende und Medienzeit in Sekunden.
+  `edge-tts` liefert 100-ns-Ticks; Originaltextzuordnung laeuft vorwaerts.
+  Nicht zuordenbare Woerter werden nicht geraten. Andere Engines liefern
+  aktuell keine Wortzeiten; Fallback auf lokale Stimmen hat keine Markierung.
+- Fortschritt wird aus konsumierten PCM-Frames und DAC-Zeit bestimmt, nicht
+  aus seit dem HTTP-Aufruf verstrichener Wandzeit. Leerlaufstille zaehlt nicht.
+- `PlaybackState` bleibt ein kleiner Polling-Zustand. `/api/tts/reading`
+  liefert den Text-Snapshot nur bei Bedarf. Session-ID und Revision schuetzen
+  die UI vor verspaeteten Antworten. Word-Events senden nicht jedes Mal das Buch.
+- Start/Ende/Stop, Fehler und Pause/Weiter werden auch per WebSocket gemeldet.
+  Die GUI rendert Praefix, ein markiertes Wort und Suffix statt tausender
+  einzelner Wortkomponenten. Nachfuehren veraendert nur `scrollTop` des
+  Lesefeldes, weder Fensterfokus noch Auswahl im fremden Programm.
+- Piper erhaelt weiterhin kleine Eingabeabschnitte, aber in einer einzigen
+  CLI-Instanz pro Vorlesung. Modellladen pro Abschnitt entfaellt; bereits
+  laufende Synthese wird nicht durch kuenstliche Satzpausen ersetzt.
+- Details: [TTS.md](TTS.md), [MWS-Analyse](MWS_READER_ANALYSIS.md).
+- Online-Verifikation: Seraphina-Kurztest mit sieben Wortmarken und ein
+  vollstaendiger 4549-Byte-Test ueber die interne Anfragegrenze mit 490 Marken.
+  Der Langtest erzeugte 157,344 s Audio bei doppeltem Tempo; Erzeugungsdauer
+  99,1 s. Keine Aussage ueber lueckenlose Wiedergabe unter beliebiger Netzlast.
+
 ## Dokumentationsregel
 
 - Jeder behobene Fehler bekommt einen Eintrag in `FIX.md`.
@@ -13,6 +64,14 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
   betroffene Dateien.
 - Zugangsdaten, Tokens, private Inhalte und komplette Clipboard-Inhalte gehoeren
   nicht in diese Dateien.
+
+## Diagnosehinweise
+
+- Nutzerbeobachtung vom 2026-10-07: Beim falsch platzierten Overlay half bisher
+  `npm audit fix`; die Backend-Prozesse hatten nach seiner Beobachtung keinen
+  Einfluss. Die genaue Dependency-/Fehlerursache ist noch nicht isoliert
+  nachgewiesen. Prozesse nicht allein wegen ihres Vorhandenseins als Ursache
+  einstufen. Bei erneutem Auftreten auch den Lockfile-Stand vergleichen.
 
 ## KDE Plasma und Selection Monitoring
 
@@ -40,11 +99,22 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 - Das Skript darf keine Eingaben simulieren, keine Pointer-Grabs verwenden und
   das Overlay nicht bei jeder Mausbewegung verschieben.
 - `workspace.cursorPos` und `frameGeometry` verwenden logische KWin-Koordinaten.
+- Der Overlay-Titel signalisiert unter KDE nur eine neue Auswahl. KWin liest
+  beim Einblenden die aktuelle Zeigerposition selbst und friert sie mit 18
+  logischen Pixeln Abstand ein. Titel-Koordinaten koennen nach einem
+  Backend-Neustart fehlen/veraltet sein und sind keine Platzierungsquelle.
 - Eine neue Geometrie muss als vollstaendiges Objekt zugewiesen werden. Das
   Veraendern einzelner Felder einer gelesenen `QRectF`-Kopie funktioniert im
   KWin-JavaScript-Kontext nicht zuverlaessig.
 - Multi-Monitor: Vor dem Move wird das Fenster mit
   `workspace.sendClientToScreen` auf den passenden Output gesetzt.
+- Der Output wird anhand des Zeigers gewaehlt, vor Addition des Abstands.
+  Das Symbol wird innerhalb dieses Outputs begrenzt, nicht innerhalb des
+  gesamten virtuellen Desktops. Keine erneute Positionierung bei Mausbewegung.
+- Die maximal drei Platzierungsversuche gelten nur fuer denselben Titel und
+  ein noch registriertes Fenster. Entfernte Fenster werden aus der Liste
+  geloescht; alte D-Bus-Antworten duerfen neuere Auswahlen nicht verschieben.
+- Platzierungstests ohne Desktop: `node --test scripts/check-overlay-position.test.mjs`.
 - Das Overlay erhaelt `skipSwitcher`, `skipTaskbar`, `skipPager` und `keepAbove`.
 
 ## Overlay-Lebenszyklus
@@ -89,7 +159,10 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
   `python3-dbus`. Oeffnet fuer 15 Sekunden ein Test-Eingabefeld und setzt echte
   PRIMARY-Auswahlen. Erfasst GTK-Fokusverluste und KWin-Aktivierungen ueber den
   gesamten Ablauf, einschliesslich Timeout und erneutem Einblenden. Prueft
-  ausserdem die tatsaechliche KWin-Fenstergroesse auf 56x56. Eine echte
+  ausserdem die tatsaechliche KWin-Fenstergroesse auf 56x56 und die Position
+  neben dem Zeiger im richtigen Output. Testtexte werden ausdruecklich als
+  neue PRIMARY-Offers gesetzt, damit GTK auch bei wiederholter Auswahl im
+  selben Eingabefeld ein Wayland-Ereignis sendet. Eine echte
   Doppelklick-/Tastaturbedienung bleibt ein zusaetzlicher manueller Test.
 
 ## Frontend Settings State
@@ -145,7 +218,8 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 - Microsoft Natural erhaelt den vollstaendigen normalisierten Text in einer
   Anfrage. OpenReader setzt fuer dieses Profil keine maximale Zeichenanzahl und
   keine interne 5000-Zeichen-Aufteilung mehr.
-- Nach normalem EOF darf PipeWire bis zu 10 Sekunden gepuffertes Audio leeren.
+- Nach normalem EOF wartet der Player auf vollstaendiges Ausspielen; die fruehere
+  feste 10-Sekunden-Grenze wuerde eine laengere Pause am Dateiende abbrechen.
 - Ein explizites Stoppen soll weiterhin schnell reagieren und verwendet deshalb
   den kurzen Terminate-Pfad.
 - Text wird vor der Synthese normalisiert und profilabhaengig in Abschnitte
@@ -203,3 +277,38 @@ backend/.venv/bin/python -m ruff check backend/openreader_backend
   einen eigenen sicheren Selection- und Positionierungsadapter.
 - Ein echtes Layer-Shell-Overlay ist weiterhin eine moegliche spaetere
   Architekturverbesserung.
+
+## 2026-10-08 - MWS-Vergleich und Wiedergabe/Import
+
+- Statische Analyse des bereitgestellten MWS Reader 5.7.867.0 mit ILSpy.
+  [Bericht, Belege und Grenzen](MWS_READER_ANALYSIS.md). Keine Original-EXE
+  ausgefuehrt, keine Windows-Teile oder proprietaeren Routinen uebernommen.
+  `/Decompile/` ist fuer Git ignoriert; Rohdekompilat und Analysewerkzeuge
+  befinden sich ausserhalb des Projekts in `/tmp`.
+- Die bestehenden KWin-/Selection-Mechanismen bleiben unveraendert. MWS-
+  Verfahren mit Strg+C-Simulation, Clipboard-Leeren oder Fokus-Ruecksetzung
+  sind keine Vorlage fuer eine sichere Wayland-Integration.
+- `PlaybackState.speaking` bezeichnet eine aktive Anfrage, auch pausiert.
+  `paused` trennt die Pause vom Stop. `error` bleibt bis zur naechsten
+  angenommenen Anfrage sichtbar. UI-Anfragen und Backend-Steuerung verhindern
+  parallele Wiedergaben; eine Pause legt keine zweite Anfrage an.
+- Alle Ausgabeformate nutzen jetzt `pw-cat`; deshalb `pipewire-bin` auch in
+  den Debian-Abhaengigkeiten. WAV wird mit vorhandener libsndfile-Bindung
+  dekodiert. Keine neue Prefetch-Queue, kein neues globales Zeichenlimit.
+- Pause nutzt SIGSTOP/SIGCONT nur fuer den eigenen Player. Schon an PipeWire
+  uebergebene Samples koennen kurz auslaufen. Lange Pausen bei Online-Engines
+  koennen vom Dienst beendet werden. Qwen kann eine gestartete GPU-Berechnung
+  noch beenden; der Thread-Lock schuetzt nur dieselbe Engineinstanz.
+- Dateiimport laeuft im Threadpool. Der Worker besitzt und loescht seine
+  Temporaerdatei. EPUB folgt dem Spine; HTML entfernt Navigation/Skripte;
+  Textdateien verlangen UTF-8 oder UTF-16 mit BOM statt Bytes zu verschlucken.
+- OCR folgt der Sprache des aktiven Voice-Profils und hat 30 Sekunden Timeout.
+  Bilder sind auf 40 Megapixel begrenzt, Vergroesserung ist zusaetzlich begrenzt.
+  Das ist eine Bildressourcengrenze, kein Text-/Vorleselimit.
+- Auf dem Testrechner sind Tesseract `eng`/`osd`, aber nicht `deu` installiert.
+  Deutsche OCR benoetigt `sudo apt install tesseract-ocr-deu`; es wurde keine
+  Systeminstallation durchgefuehrt. Scan-PDFs werden noch nicht gerendert.
+- Tests: 47 mit `OPENREADER_TEST_PIPEWIRE=1 OPENREADER_TEST_OCR=1`, davon vier
+  opt-in Integrationstests. Ohne diese Variablen werden die vier uebersprungen.
+  Der Playwright-Check startet eine eigene stumme Engine ohne Desktop-Hooks
+  und veraendert keine gespeicherten Nutzerprofile.

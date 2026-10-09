@@ -26,6 +26,9 @@ Runtime:
 
 - `libwebkit2gtk-4.1-0`
 - `ffmpeg`
+- `pipewire-bin` (`pw-cat`, Audioplayer fuer lokale Engines)
+- `libportaudio2` (getaktete Microsoft-Ausgabe mit Wortmarkierung; Python `sounddevice` ist bereits Backend-Abhaengigkeit)
+- PipeWire-ALSA-Plugin (`pipewire-alsa`) oder eine PortAudio-PulseAudio-Ausgabe fuer den getakteten Player
 - `wl-clipboard`
 - `xdg-desktop-portal`
 - `xdg-desktop-portal-kde`
@@ -37,7 +40,7 @@ Runtime:
 Empfohlen:
 
 - `piper`
-- GPU-fähige PyTorch/Qwen Umgebung
+- `tesseract-ocr-deu` fuer deutsche OCR, `tesseract-ocr-eng` fuer englische OCR
 
 ## Backend Bundling
 

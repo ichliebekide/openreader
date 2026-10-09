@@ -7,23 +7,30 @@ import {
   Moon,
   Play,
   Settings,
+  Square,
   Upload,
   Volume2
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { OverlayBubble } from "./components/OverlayBubble";
+import { ReadingText } from "./components/ReadingText";
 import {
   connectEventStream,
+  extractDocument,
   getPlaybackState,
+  getReadingSnapshot,
   getHealth,
   getSettings,
   getTtsStatus,
+  pauseTts,
+  resumeTts,
   speakText,
   stopTts,
   testTts,
   updateSettings,
   type ReaderSettings,
+  type PlaybackUpdate,
   type SelectionEvent,
   type TTSStatus
 } from "./lib/backend";
@@ -66,6 +73,19 @@ function MainApp() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [selection, setSelection] = useState<SelectionEvent>(defaultEvent);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [readingText, setReadingText] = useState("");
+  const [wordRange, setWordRange] = useState<[number | null, number | null]>([null, null]);
+  const serverRevisionRef = useRef(-1);
+  const readingSessionRef = useRef<string | null>(null);
+  const snapshotPendingRef = useRef(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
+  const controlBusyRef = useRef(false);
+  const playbackRevisionRef = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const settingsRef = useRef<ReaderSettings | null>(null);
   const pendingSettingsRef = useRef<ReaderSettings | null>(null);
   const saveInFlightRef = useRef(false);
@@ -94,12 +114,19 @@ function MainApp() {
         .catch(() => {
           if (!stopped) setTtsStatus(null);
         });
+      const playbackRevision = playbackRevisionRef.current;
       getPlaybackState()
         .then((nextState) => {
-          if (!stopped) setIsSpeaking(nextState.speaking);
+          if (!stopped && !controlBusyRef.current && playbackRevision === playbackRevisionRef.current) {
+            applyPlaybackState(nextState);
+          }
         })
         .catch(() => {
-          if (!stopped) setIsSpeaking(false);
+          if (!stopped && !controlBusyRef.current && playbackRevision === playbackRevisionRef.current) {
+            setIsSpeaking(false);
+            setIsPaused(false);
+            setWordRange([null, null]);
+          }
         });
     };
 
@@ -121,7 +148,7 @@ function MainApp() {
       const x = event.cursor_x ?? 48;
       const y = event.cursor_y ?? 48;
       void invoke("show_overlay", { x: x + 18, y: y + 18 });
-    });
+    }, applyPlaybackState);
 
     return () => {
       stopped = true;
@@ -157,24 +184,93 @@ function MainApp() {
     [settings]
   );
 
-  const engineLabel = selectedProfile?.engine ?? settings?.backend_engine ?? health?.engine ?? "qwen";
+  const engine = selectedProfile?.engine ?? settings?.backend_engine ?? health?.engine ?? "piper";
+  const engineLabel = engine === "edge" ? "Seraphina" : "Piper";
+  const readingCharCount = useMemo(() => [...readingText].length, [readingText]);
+
+  function applyPlaybackState(state: PlaybackUpdate) {
+    if (!mountedRef.current) return;
+    // A snapshot can arrive after newer word events; its session text is immutable.
+    if (state.revision < serverRevisionRef.current) {
+      if (state.session_id === readingSessionRef.current && state.text) setReadingText(state.text);
+      return;
+    }
+    serverRevisionRef.current = state.revision;
+    if (state.session_id !== readingSessionRef.current) {
+      readingSessionRef.current = state.session_id;
+      setReadingText("");
+      if (state.speaking && state.text == null && !snapshotPendingRef.current) {
+        snapshotPendingRef.current = true;
+        void getReadingSnapshot().then(applyPlaybackState).catch(() => undefined)
+          .finally(() => { snapshotPendingRef.current = false; });
+      }
+    }
+    if (state.text != null) setReadingText(state.text);
+    setWordRange(state.speaking ? [state.word_start, state.word_end] : [null, null]);
+    setIsSpeaking(state.speaking);
+    setIsPaused(state.paused);
+    setPlaybackError(state.error);
+  }
+
+  async function playbackCommand(command: () => Promise<void>) {
+    if (controlBusyRef.current) return;
+    controlBusyRef.current = true;
+    playbackRevisionRef.current += 1;
+    setControlBusy(true);
+    setPlaybackError(null);
+    try {
+      await command();
+    } catch (error) {
+      setPlaybackError(error instanceof Error ? error.message : "Sprachausgabe fehlgeschlagen.");
+    } finally {
+      playbackRevisionRef.current += 1;
+      controlBusyRef.current = false;
+      setControlBusy(false);
+    }
+  }
 
   async function speakCurrentSelection() {
     const text = selection.text.trim();
     if (!text || isSpeaking) return;
-    const response = await speakText(text, selectedProfile?.id);
-    setIsSpeaking(response.speaking);
+    await playbackCommand(async () => {
+      await speakText(text, selectedProfile?.id);
+      applyPlaybackState(await getReadingSnapshot());
+    });
   }
 
   async function runTtsTest() {
     if (isSpeaking) return;
-    const response = await testTts("OpenReader TTS ist bereit.", selectedProfile?.id);
-    setIsSpeaking(response.speaking);
+    await playbackCommand(async () => {
+      await testTts("OpenReader TTS ist bereit.", selectedProfile?.id);
+      applyPlaybackState(await getReadingSnapshot());
+    });
   }
 
   async function stopPlayback() {
-    const state = await stopTts();
-    setIsSpeaking(state.speaking);
+    await playbackCommand(async () => applyPlaybackState(await stopTts()));
+  }
+
+  async function togglePause() {
+    await playbackCommand(async () => applyPlaybackState(await (isPaused ? resumeTts() : pauseTts())));
+  }
+
+  async function importFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setIsImporting(true);
+    setImportError(null);
+    try {
+      const document = await extractDocument(file);
+      setSelection({
+        ...defaultEvent, text: document.text, text_preview: document.text,
+        char_count: document.char_count, created_at: new Date().toISOString()
+      });
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Datei konnte nicht gelesen werden.");
+    } finally {
+      setIsImporting(false);
+    }
   }
 
   function startWindowDrag(event: MouseEvent<HTMLElement>) {
@@ -315,31 +411,45 @@ function MainApp() {
           <article className="primary-panel">
             <div className="panel-header">
               <div>
-                <p className="eyebrow">Aktuelle Auswahl</p>
-                <h2>{selection.char_count} Zeichen</h2>
+                <p className="eyebrow">{isSpeaking ? "Wird vorgelesen" : "Aktuelle Auswahl"}</p>
+                <h2>{isSpeaking && readingText ? readingCharCount : selection.char_count} Zeichen</h2>
               </div>
               <button className="icon-button" aria-label="Dark Mode">
                 <Moon size={18} />
               </button>
             </div>
 
-            <div className="selection-box">
-              {selection.text_preview}
-            </div>
+            <ReadingText text={isSpeaking && readingText ? readingText : selection.text || selection.text_preview}
+              start={isSpeaking && readingText ? wordRange[0] : null}
+              end={isSpeaking && readingText ? wordRange[1] : null} />
 
-            <div className="action-row">
-              <button className="primary-action" onClick={speakCurrentSelection} disabled={isSpeaking}>
-                <Play size={18} />
-                {isSpeaking ? "Läuft" : "Vorlesen"}
-              </button>
-              <button className="secondary-action" onClick={stopPlayback} disabled={!isSpeaking}>
-                <CirclePause size={18} />
-                Pausieren
-              </button>
-              <button className="secondary-action">
-                <Upload size={18} />
-                Datei
-              </button>
+            <div>
+              <div className="action-row">
+                <button className="primary-action" onClick={speakCurrentSelection}
+                  disabled={isSpeaking || controlBusy || !selection.text.trim()}>
+                  <Play size={18} />
+                  {isPaused ? "Pausiert" : isSpeaking ? "Läuft" : "Vorlesen"}
+                </button>
+                <button className="secondary-action" onClick={togglePause}
+                  disabled={!isSpeaking || controlBusy}>
+                  {isPaused ? <Play size={18} /> : <CirclePause size={18} />}
+                  {isPaused ? "Fortsetzen" : "Pausieren"}
+                </button>
+                <button className="secondary-action stop-action" onClick={stopPlayback}
+                  disabled={!isSpeaking || controlBusy} aria-label="Stoppen" title="Stoppen">
+                  <Square size={18} />
+                </button>
+                <button className="secondary-action" onClick={() => fileInputRef.current?.click()}
+                  disabled={isImporting}>
+                  <Upload size={18} />
+                  {isImporting ? "Liest Datei …" : "Datei"}
+                </button>
+                <input ref={fileInputRef} type="file" hidden onChange={importFile}
+                  accept=".pdf,.epub,.txt,.md,.html,.htm,.xhtml,.png,.jpg,.jpeg,.tif,.tiff,.webp" />
+              </div>
+              {(importError || playbackError) && (
+                <p className="reader-error" role="alert">{importError || playbackError}</p>
+              )}
             </div>
           </article>
 
@@ -354,12 +464,9 @@ function MainApp() {
 
             <label className="field">
               <span>TTS Engine</span>
-              <select value={settings?.backend_engine ?? "qwen"} onChange={handleEngineChange}>
-                <option value="qwen">Qwen</option>
-                <option value="cosyvoice">CosyVoice</option>
-                <option value="edge">Microsoft Natural</option>
+              <select value={settings?.backend_engine ?? "piper"} onChange={handleEngineChange}>
+                <option value="edge">Microsoft Seraphina</option>
                 <option value="piper">Piper</option>
-                <option value="mock">Mock</option>
               </select>
             </label>
 
@@ -416,7 +523,7 @@ function MainApp() {
               {(ttsStatus?.engines ?? []).map((engine) => (
                 <div className="tts-status-row" key={engine.engine}>
                   <span className={engine.available && engine.configured ? "dot ok" : "dot"} />
-                  <span>{engine.engine}</span>
+                  <span>{engine.engine === "edge" ? "Seraphina" : "Piper"}</span>
                   <small>{engine.available && engine.configured ? "bereit" : "nicht bereit"}</small>
                 </div>
               ))}

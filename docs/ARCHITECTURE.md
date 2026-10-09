@@ -73,7 +73,7 @@ Das Backend kennt keine Tauri-Interna. Es publiziert Selection-Events und spielt
 
 ## Warum Rust und Python?
 
-Qwen, Piper, OCR und Dokument-Parsing sind im Python-Oekosystem schneller
+Piper, Microsoft Seraphina, OCR und Dokument-Parsing sind im Python-Oekosystem schneller
 integrierbar. Rust verantwortet Desktop-Shell, Fensterverhalten und den direkten
 Wayland-Protokolladapter. Klipper D-Bus bleibt nur der Selection-Fallback fuer
 aelteres KWin.

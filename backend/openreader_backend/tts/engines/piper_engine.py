@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
 import shutil
 import sys
+from collections.abc import AsyncIterator
+from contextlib import suppress
+from pathlib import Path
 
 from ...models import VoiceProfile
-from ..base import AudioChunk
 from ...utils.pronunciation import apply_pronunciations
+from ...utils.text import split_sentences
+from ..base import AudioChunk
+from ..process_utils import read_error_tail
 
 
 class PiperEngine:
@@ -48,9 +51,16 @@ class PiperEngine:
         assert process.stdin is not None
         assert process.stdout is not None
         spoken_text = apply_pronunciations(text.strip())
-        process.stdin.write(f"{spoken_text}\n".encode("utf-8"))
-        await process.stdin.drain()
-        process.stdin.close()
+        async def feed() -> None:
+            try:
+                for section in split_sentences(spoken_text, max_chars=420):
+                    process.stdin.write(f"{section}\n".encode())
+                    await process.stdin.drain()
+            finally:
+                process.stdin.close()
+
+        feeder = asyncio.create_task(feed())
+        errors = asyncio.create_task(read_error_tail(process.stderr))
 
         try:
             while True:
@@ -63,18 +73,25 @@ class PiperEngine:
                     encoding="raw_s16le",
                 )
 
+            await feeder
             await process.wait()
+            stderr = await errors
             if process.returncode != 0:
-                stderr = await process.stderr.read() if process.stderr else b""
                 raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "Piper failed")
         finally:
+            feeder.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await feeder
             if process.returncode is None:
                 process.terminate()
                 try:
                     await asyncio.wait_for(process.wait(), timeout=0.6)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     process.kill()
                     await process.wait()
+            errors.cancel()
+            with suppress(asyncio.CancelledError):
+                await errors
 
     @staticmethod
     def _resolve_command() -> Path:

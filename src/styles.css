@@ -258,6 +258,7 @@ h2 {
 }
 
 .selection-box {
+  overflow-wrap: anywhere;
   min-height: 0;
   padding: 22px;
   border-radius: 8px;
@@ -295,6 +296,19 @@ h2 {
 
 .secondary-action.full-width {
   width: 100%;
+}
+
+.stop-action {
+  width: 42px;
+  padding: 0;
+}
+
+.reader-error {
+  color: #ffabab;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  margin: 12px 0 0;
 }
 
 .primary-action:hover,
@@ -484,7 +498,16 @@ h2 {
 
   .reader-grid {
     grid-template-columns: 1fr;
+    grid-auto-rows: max-content;
     overflow-y: auto;
+  }
+
+  .primary-panel {
+    grid-template-rows: auto minmax(160px, 320px) auto;
+  }
+
+  .settings-panel {
+    overflow-y: visible;
   }
 }
 
@@ -505,4 +528,11 @@ h2 {
   .settings-panel {
     padding: 18px;
   }
+}
+.spoken-word {
+  background: #f5d56b;
+  color: #171b22;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }

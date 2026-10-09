@@ -10,8 +10,8 @@
 - `wl-clipboard` Data-Control-Adapter fuer wlroots-Compositoren
 - KWin Context Bridge für Cursorposition und Terminal-Ausschluss
 - `/api/speak` mit satzweiser TTS-Ausgabe
-- Qwen Engine mit Voice Clone Profil
-- Piper Engine als Fast-TTS Fallback
+- Microsoft Seraphina mit Streaming und Wortmarkierung
+- Piper als lokale Engine und Offline-Fallback
 
 ## Phase 2: Reader Features
 
@@ -35,7 +35,7 @@
 
 - `.deb` mit postinst-Hinweisen für KWin Script
 - AppImage mit gebündeltem Backend
-- GPU/CPU Modellprofile
+- Piper-Stimmenpakete und Online-/Offline-Diagnose
 - Systemd user service optional
 - Autostart Integration
 - End-to-End Tests auf KDE Plasma Wayland

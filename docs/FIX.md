@@ -4,6 +4,117 @@ Diese Datei dokumentiert reproduzierbare Fehler, ihre Ursache, die umgesetzte
 Loesung und die Verifikation. Neue Fehlerbehebungen werden ab jetzt hier
 chronologisch ergaenzt.
 
+## 2026-10-08 - Engine-Auswahl auf Piper und Seraphina reduziert
+
+- Nutzerwunsch: alle anderen TTS-Engines entfernen.
+- Aenderung: Qwen, CosyVoice und Mock aus Backend, UI, Status, Profilen,
+  Setup-Skripten und Abhaengigkeitsdefinition entfernt; kein GPU-Warmup mehr.
+  Historische Fehler-/Analyseberichte bleiben als Verlauf erhalten.
+- Migration: alte Profile vor Schema-Validierung filtern, damit nicht saemtliche
+  Einstellungen wegen eines entfernten Enum-Wertes zurueckgesetzt werden.
+  Piper-/Seraphina-Profile samt Tempo/Lautstaerke und Auswahloptionen bleiben.
+  Entfernte aktive lokale Engines wechseln zu Piper, niemals still zu Online-TTS.
+- Kein Mock-Testton mehr bei Ausfall aller Engines: vorhandene Fehleranzeige
+  zeigt den Fehler. Fallback bleibt vor dem ersten Audio erlaubt und lokal.
+- Modellcaches, Python-Venv-Pakete und NVIDIA-Treiber werden nicht geloescht.
+- Verifikation: Migration fuer alle fuenf bisherigen Engine-Werte, Schema-
+  Ablehnung entfernter Engines, nur lokale Fallbacks und Fehler statt Testaudio
+  durch neue Regressionstests abgedeckt. UI-Check erwartet genau zwei Engines.
+  Ergebnis: 67 Backend-Tests inklusive PipeWire/OCR bestanden; Playwright
+  (zwei Engines, Wortmarkierung, Pause/Stop und Layout) und Produktionsbuild
+  erfolgreich. Vier bestehende FastAPI-Deprecation-Warnungen bleiben.
+- Dateien: `models.py`, `settings.py`, `tts/orchestrator.py`, `main.py`,
+  `src/App.tsx`, `src/lib/backend.ts`, Tests, Setup-/Diagnoseskripte und Doku.
+
+## 2026-10-08 - Durchgehendes Lesen und echte Wortmarkierung
+
+- Befund: Piper startete fuer jeden OpenReader-Abschnitt einen neuen CLI-Prozess
+  inklusive Modellladung. Der vorhandene Player wurde zwar wiederverwendet,
+  die Erzeugung hielt dadurch aber zwischen Abschnitten an.
+- Fix: eine Piper-Instanz pro Vorlesung; begrenzte Textabschnitte werden als
+  Eingabezeilen an denselben Prozess geschickt. stdin, PCM-stdout und stderr
+  laufen gleichzeitig. stderr wird auf einen 8-KiB-Diagnoseschwanz begrenzt;
+  Abbruch schliesst auch einen noch schreibenden Feeder und den Kindprozess.
+- Befund: Edge-Metadaten wurden verworfen und standardmaessig nur Satzgrenzen
+  angefordert. `pw-cat` stellt dem Backend keine abfragbare Medienuhr bereit.
+- Fix: ausdrueckliche WordBoundary-Anforderung, Originaltext-/UTF-16-Zuordnung,
+  separater kontrollierter Callbackplayer fuer Microsoft mit DAC-Zeitachse.
+  Maximal 240 ms PCM in dessen eigener Queue, Start mit dem ersten Block,
+  kein Volltext-Audioprefetch. Andere Pipelinepuffer bleiben vorhanden.
+- UI: sichtbare Wortmarkierung, Nachfuehren ausschliesslich im Lesefeld,
+  Pause/Weiter/Stop, unveraenderlicher Text pro Vorlesung, Session/Revision gegen
+  veraltete Antworten und Snapshot beim Wiederverbinden. Keine Fokusaufrufe.
+  Keine geschaetzten Wortzeiten fuer lokale Engines ohne passende Metadaten.
+- Weiterer Fehler: volle Event-Queues entfernten einen Abonnenten dauerhaft.
+  Jetzt wird ein altes Ereignis verworfen, ohne die Verbindung stillzulegen.
+- Verifikation: automatisierte Tests fuer UTF-16, Wiederholungen, unbekannte
+  Woerter, DAC-/Pause-/Unterversorgungszeit, begrenzte Queue, Cancellation,
+  Session-Lebenszyklus und Piper-Prozesse. Echter stummer PipeWire-Test sowie
+  Playwright fuer Wortmarkierung, Pause, Import waehrend Vorlesung, Reconnect,
+  Stop und Desktop-/Mobilansichten bestanden. Build und Cargo-Check bestanden.
+  Gesamtsuite: 58 Tests bestanden mit `OPENREADER_TEST_PIPEWIRE=1` und
+  `OPENREADER_TEST_OCR=1`; vier bereits vorhandene FastAPI-Deprecation-Warnungen.
+- Live-Seraphina-Kurztest lieferte sieben deutsche Wort-Zeitmarken. Ein erster
+  Langtest wurde vom Testharness nach 90 s beendet, nicht von einer App-Textgrenze.
+  Separater Fortschrittslauf: 138,91 s Audio in 35 s, fortlaufende Wortpositionen.
+  Vollstaendiger Grenztest mit doppeltem Testtempo: 4549 UTF-8-Bytes/Zeichen,
+  490 Woerter, 157,344 s PCM in 99,1 s erzeugt; letzte Wortposition korrekt,
+  auch nach internem 4096-Byte-Anfragewechsel. Nur synthetischer Testtext,
+  keine Nutzerauswahl an den Dienst geschickt und kein Profil gespeichert.
+  Keine Behauptung, dass alle Online-Pausen oder alle Engine-Limits verschwinden.
+- Details und verbleibende Grenzen: [TTS.md](TTS.md).
+- Dateien: `tts/{base,timing,clocked_player,orchestrator,process_utils}.py`,
+  `tts/engines/{edge,piper}_engine.py`, `main.py`, `models.py`, `events.py`,
+  `src/components/ReadingText.tsx`, `src/App.tsx`, `src/lib/backend.ts`,
+  Tests, Linux-Abhaengigkeiten und diese Dokumentation.
+
+## 2026-10-08 - Verbesserungen aus der MWS-Analyse
+
+- Symptom: Der Pause-Knopf brach die Anfrage ab; WAV-Wiedergabe konnte nach
+  Stop in einem blockierenden Arbeitsthread weiterlaufen. Start/Stop konnte
+  gleichzeitig dieselbe Playerinstanz erreichen.
+- Ursache: UI rief den Stop-Endpunkt auf. Nur rohe PCM-Ausgabe hatte einen
+  kontrollierbaren Subprozess. Stop und Settings-Wechsel verwendeten nicht
+  dieselbe Sperre wie Start.
+- Aenderung: Pause-/Resume-API, eigener Stop-Knopf, `paused`-/Fehlerzustand,
+  ein eigener PipeWire-Prozess fuer PCM und dekodierte WAV-Chunks. Pause
+  pausiert ausschliesslich diesen Prozess und die weitere Streamabfrage.
+  Stop bricht den Generator ab und bereinigt Prozess/Engine. EOF hat keine
+  feste 10-Sekunden-Grenze mehr, die eine laengere Pause abbrechen wuerde.
+  Start, Stop, Pause, Resume und Settings-Wechsel sind serialisiert.
+- Weiterer TTS-Fehler: Fallback nach bereits erzeugtem Audio wiederholte den
+  Abschnitt; jetzt nur noch Fallback vor dem ersten Audio. Fehler erscheinen
+  in der GUI. Satzaufteilung erhaelt Satzzeichen, Dezimalzahlen und URLs.
+- Qwen-Befund: Cancellation von `asyncio.to_thread` stoppt den Arbeitsthread
+  nicht. Ein Thread-RLock verhindert nun ueberlappenden Modellzugriff innerhalb
+  derselben Engineinstanz. Keine Behauptung eines harten GPU-Abbruchs.
+- Import-Befunde: Dateiknopf ohne Aktion, blockierende Extraktion in der
+  Eventloop, EPUB in Manifestreihenfolge, OCR standardmaessig Englisch und
+  ungueltige Textbytes still verworfen.
+- Import-Aenderung: GUI-Dateiauswahl, Worker mit eigener temporaerer Datei,
+  EPUB-Spine, HTML-Import, UTF-8/UTF-16-BOM, sprachabhaengige OCR mit Timeout,
+  EXIF-/Alpha-Vorbereitung und begrenzter Vergroesserung. Klare Fehler bei
+  fehlender OCR-Sprache, textloser PDF oder unlesbarer Textdatei.
+- UI-Verifikation fand einen Ueberlauf der neuen Fehlermeldung bei 390 Pixeln
+  Breite. Die einspaltige Ansicht nutzt jetzt inhaltsabhaengige Zeilenhoehen.
+- Zusaetzlicher Regressionstest: Float-WAV muss vor Int16-Konvertierung
+  skaliert werden, sonst waere die Ausgabe nahezu stumm. Der Test schlug
+  vor der Korrektur reproduzierbar fehl und prueft jetzt exakte PCM-Pegel.
+- Verifikation: 47 pytest-Tests bestanden, inklusive drei echter PipeWire-
+  Tests mit Stille und eines echten Tesseract-Tests (Englisch). Playwright:
+  Import, Fehler, Pause/Weiter/Stop, 1240x800, 1040x660 und 390x844 bestanden.
+  `npm run build`, `cargo check` und Ruff fuer die geaenderten Logik-/Testdateien
+  erfolgreich. Vier vorhandene FastAPI-on_event-Deprecation-Warnungen bleiben.
+- Grenzen: Deutsches Tesseract-Modell fehlt auf dem Host; Fehlerpfad getestet,
+  keine deutsche OCR-Qualitaetsabnahme. Keine Klang-/GPU-/Netzwerk-Abnahme aller
+  TTS-Engines, keine neue Fokus-/Mehrmonitor-Abnahme. KWin nicht veraendert.
+- Betroffene Dateien: `backend/openreader_backend/{main,models}.py`,
+  `services/document_service.py`, `tts/{player,orchestrator}.py`,
+  `tts/engines/qwen_engine.py`, `utils/text.py`, `src/App.tsx`,
+  `src/lib/backend.ts`, `src/styles.css`, `src-tauri/tauri.conf.json`, neue
+  Backend-Tests und `scripts/check-reader-ui.mjs`.
+- Analyse und Begruendung: [MWS_READER_ANALYSIS.md](MWS_READER_ANALYSIS.md).
+
 ## Format fuer neue Eintraege
 
 ```text
@@ -15,6 +126,48 @@ chronologisch ergaenzt.
 - Verifikation:
 - Betroffene Dateien:
 ```
+
+## 2026-10-07 - Vorlesesymbol oben links auf dem falschen Monitor
+
+- Symptom: Das Symbol erschien links oben auf dem zweiten Bildschirm statt
+  neben dem Zeiger.
+- Technischer Befund (keine abschliessend nachgewiesene Fehlerursache):
+  KWin verwendete die ueber Backend, React und Fenstertitel
+  transportierten Koordinaten. Bei fehlendem Desktop-Kontext setzt React
+  48 plus 18 Pixel Abstand ein: (66, 66), bei der vorgefundenen Anordnung
+  auf dem linken Zweitmonitor. Auch veraltete Koordinaten wurden uebernommen.
+  Die Begrenzung am virtuellen Desktop konnte das Symbol ausserdem ueber
+  interne Monitorgrenzen verschieben. Der historische Koordinatenwert des
+  gemeldeten Fehlers war nicht mehr verfuegbar.
+- Nutzerkorrektur: Die Backend-Prozesse hatten nach Beobachtung des Nutzers
+  keinen Einfluss; bisher half ihm `npm audit fix`. Ein kausaler Einfluss der
+  vorgefundenen Prozesse wurde nicht nachgewiesen. Auch der Zusammenhang
+  zwischen Dependency-Aenderungen und diesem Fehler wurde nicht isoliert
+  untersucht. Der erfolgreiche Gesamttest beweist keine einzelne Ursache.
+- Aenderung: KWin liest bei jeder neuen Overlay-Anfrage selbst cursorPos.
+  Der Titel bleibt der Ausloeser, seine Koordinaten werden nicht mehr als
+  Platzierungsquelle verwendet. Der Monitor wird vor Addition des Abstands
+  gewaehlt und das Symbol auf dessen Geometrie begrenzt. Die Position bleibt
+  danach fest. Alte asynchrone Platzierungsantworten werden nach neuer
+  Auswahl oder Entfernen des Fensters verworfen. Fokusregel und runder
+  Klickbereich bleiben unveraendert.
+- Betrieb: Die beiden verwaisten Backends (15976, 19695) reagierten nicht auf
+  SIGTERM und wurden gezielt per SIGKILL beendet. KWin-Skript aktualisiert
+  und OpenReader ueber openreader-dev.service gestartet; nur ein Backend
+  und ein Selection-Helper laufen.
+- Verifikation: Sechs Node-Regressionstests bestanden: fehlende/veraltete
+  Koordinaten, Monitorgrenze, negative Koordinaten, feststehendes Symbol,
+  ueberholte Antworten und entfernte Fenster. Live-Test auf dem aktuellen
+  Zwei-Monitor-Desktop mit 125 Prozent Skalierung: zwei Maps, fuenf korrekte
+  Positionspruefungen, 56x56, keine Fokusverluste/Overlay-Aktivierungen.
+  Vorlaeufe erfassten nur eine Platzierung; der Test bietet PRIMARY nun
+  ausdruecklich erneut an. Ein weiterer Lauf wurde durch Fokuswechsel
+  gestoert; der abschliessende vollstaendige Lauf bestand. Monitorwechsel
+  und negative Koordinaten sind durch Simulation, nicht Mausautomation,
+  abgedeckt. `git diff --check` bestanden.
+- Betroffene Dateien: `integrations/kwin/openreader-context/contents/code/main.js`,
+  `scripts/check-overlay-position.test.mjs`, `scripts/check-overlay-focus.js`,
+  `scripts/check-overlay-focus.py`, `docs/NOTES.md`
 
 ## 2026-09-15 - Zu grosser unsichtbarer Bereich um das Vorlesesymbol
 

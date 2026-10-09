@@ -1,6 +1,6 @@
 # OpenReader
 
-OpenReader ist ein Wayland-first Linux-Reader als moderne Alternative zu MWS Reader: Text markieren, kleines rundes Speaker-Overlay anklicken, lokal vorlesen lassen.
+OpenReader ist ein Wayland-first Linux-Reader als moderne Alternative zu MWS Reader: Text markieren, kleines rundes Speaker-Overlay anklicken, mit Piper lokal oder mit Microsoft Seraphina online vorlesen lassen.
 
 Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Windows- oder X11-only Hooks und nutzt stattdessen:
 
@@ -51,7 +51,8 @@ sudo apt install -y \
   build-essential curl file libwebkit2gtk-4.1-dev librsvg2-dev \
   libayatana-appindicator3-dev libsoup-3.0-dev javascriptcoregtk-4.1 \
   wl-clipboard xdg-desktop-portal xdg-desktop-portal-kde \
-  tesseract-ocr python3 python3-venv python3-pip
+  tesseract-ocr python3 python3-venv python3-pip \
+  pipewire-bin pipewire-alsa libportaudio2
 ```
 
 Optional:
@@ -60,20 +61,7 @@ Optional:
 sudo apt install -y piper
 ```
 
-Qwen TTS:
-
-```bash
-./scripts/setup-qwen.sh
-sudo apt install sox
-```
-
-CosyVoice GGUF:
-
-```bash
-./scripts/setup-cosyvoice.sh
-```
-
-Schneller lokaler Piper-Fallback:
+Piper einrichten:
 
 ```bash
 ./scripts/setup-tts.sh
@@ -87,7 +75,7 @@ Schneller lokaler Piper-Fallback:
 ./scripts/dev.sh
 ```
 
-`scripts/dev.sh` erstellt eine Python-venv, installiert den Backend-Dienst editierbar und startet anschließend Tauri. Für Qwen brauchst du zusätzlich die `qwen` Extras und passende GPU/CPU-Ressourcen.
+`scripts/dev.sh` erstellt eine Python-venv, installiert den Backend-Dienst editierbar und startet anschließend Tauri.
 
 Fuer einen vom Terminal unabhaengigen Entwicklungsstart:
 
@@ -106,39 +94,26 @@ Der Prozess laeuft dann als `openreader-dev.service` im Benutzerkontext weiter.
 4. Backend sendet `SelectionEvent` per WebSocket.
 5. Tauri zeigt das Overlay-Fenster neben der zuletzt bekannten Mausposition.
 6. Klick auf das Overlay ruft `/api/speak` auf.
-7. `TTSOrchestrator` splittet Text satzweise und streamt Audio zur lokalen Ausgabe.
+7. `TTSOrchestrator` streamt Audio zur lokalen Ausgabe; Piper verarbeitet Textabschnitte im selben Prozess.
 
 ## TTS Engines
 
-Primär:
-
-- `Qwen/Qwen3-TTS-12Hz-0.6B-Base`
-- Engine-Datei: `backend/openreader_backend/tts/engines/qwen_engine.py`
-- arbeitet satzweise, damit Wiedergabe schnell startet
-- benötigt `pip install -e "backend[qwen]"`
-
-Alternative AI-Engine:
-
-- `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` via `cosyvoice.cpp` GGUF
-- Engine-Datei: `backend/openreader_backend/tts/engines/cosyvoice_engine.py`
-- Setup: `./scripts/setup-cosyvoice.sh`
-
-Microsoft Natural Voice (online):
+Microsoft Seraphina (online):
 
 - `de-DE-SeraphinaMultilingualNeural`
 - Engine-Datei: `backend/openreader_backend/tts/engines/edge_engine.py`
 - streamt ueber `edge-tts`, `ffmpeg` und PipeWire; kein Windows/SAPI noetig
 - benoetigt eine Internetverbindung, aber keinen JSON2Video-Account
 
-Optional schnell:
+Piper (offline):
 
 - Piper CLI mit `--output-raw`
 - Engine-Datei: `backend/openreader_backend/tts/engines/piper_engine.py`
 - Setup: `./scripts/setup-tts.sh`
 
-Dev-Fallback:
-
-- Mock-Sinusgenerator zum Testen der App ohne Modellinstallation
+Neue Installationen starten mit Piper. Eine Online-Stimme wird niemals automatisch
+als Ersatz fuer eine lokale Stimme verwendet. Fehler werden angezeigt, nicht
+durch Testtoene ersetzt. Wortmarkierung ist fuer Seraphina verfuegbar.
 
 Details: [docs/TTS.md](docs/TTS.md)
 
@@ -182,3 +157,4 @@ Die beweglichen Plattformdetails wurden gegen offizielle oder primäre Quellen a
 
 - Behobene Fehler und Verifikation: [docs/FIX.md](docs/FIX.md)
 - Technische Entscheidungen und Betriebswissen: [docs/NOTES.md](docs/NOTES.md)
+- MWS-Analyse und unabhaengige Verbesserungen: [docs/MWS_READER_ANALYSIS.md](docs/MWS_READER_ANALYSIS.md)

@@ -11,19 +11,19 @@ export type SelectionEvent = {
 };
 
 export type TTSEngineStatus = {
-  engine: "qwen" | "cosyvoice" | "edge" | "piper" | "mock";
+  engine: TTSEngine;
   available: boolean;
   configured: boolean;
   detail: string;
 };
 
 export type TTSStatus = {
-  preferred_engine: "qwen" | "cosyvoice" | "edge" | "piper" | "mock";
+  preferred_engine: TTSEngine;
   engines: TTSEngineStatus[];
-  fallback_order: Array<"qwen" | "cosyvoice" | "edge" | "piper" | "mock">;
+  fallback_order: TTSEngine[];
 };
 
-export type TTSEngine = "qwen" | "cosyvoice" | "edge" | "piper" | "mock";
+export type TTSEngine = "edge" | "piper";
 
 export type SpeakResponse = {
   ok: boolean;
@@ -33,27 +33,25 @@ export type SpeakResponse = {
 
 export type PlaybackState = {
   speaking: boolean;
+  paused: boolean;
+  error: string | null;
+  session_id: string | null;
+  revision: number;
+  word_start: number | null;
+  word_end: number | null;
 };
+
+export type PlaybackUpdate = PlaybackState & { text?: string | null };
 
 export type VoiceProfile = {
   id: string;
   label: string;
   engine: TTSEngine;
   language: string;
-  reference_audio: string | null;
-  reference_text: string | null;
   piper_model_path: string | null;
   piper_config_path: string | null;
   piper_sample_rate: number;
   piper_speaker: number | null;
-  cosyvoice_binary_path: string | null;
-  cosyvoice_backend_path: string | null;
-  cosyvoice_model_path: string | null;
-  cosyvoice_prompt_speech_path: string | null;
-  cosyvoice_voice: string;
-  cosyvoice_sample_rate: number;
-  cosyvoice_mode: string;
-  cosyvoice_instruction: string | null;
   edge_voice: string | null;
   length_scale: number;
   noise_scale: number;
@@ -67,11 +65,6 @@ export type ReaderSettings = {
   overlay_timeout_ms: number;
   backend_engine: TTSEngine;
   active_profile_id: string | null;
-  qwen_model_id: string;
-  qwen_device: string;
-  cosyvoice_server_url: string;
-  cosyvoice_model_name: string;
-  cosyvoice_auto_start: boolean;
   ignore_terminal_windows: boolean;
   excluded_window_classes: string[];
   voice_profiles: VoiceProfile[];
@@ -151,9 +144,38 @@ export async function stopTts(): Promise<PlaybackState> {
   return response.json();
 }
 
+export async function pauseTts(): Promise<PlaybackState> {
+  const response = await fetch(`${API_BASE}/api/tts/pause`, { method: "POST" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function resumeTts(): Promise<PlaybackState> {
+  const response = await fetch(`${API_BASE}/api/tts/resume`, { method: "POST" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function extractDocument(file: File): Promise<{ text: string; char_count: number }> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch(`${API_BASE}/api/documents/extract`, { method: "POST", body });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.detail ?? "Datei konnte nicht gelesen werden.");
+  }
+  return response.json();
+}
+
 export async function getPlaybackState(): Promise<PlaybackState> {
   const response = await fetch(`${API_BASE}/api/tts/playback`);
   if (!response.ok) throw new Error("OpenReader playback state is not available");
+  return response.json();
+}
+
+export async function getReadingSnapshot(): Promise<PlaybackUpdate> {
+  const response = await fetch(`${API_BASE}/api/tts/reading`);
+  if (!response.ok) throw new Error("OpenReader reading state is not available");
   return response.json();
 }
 
@@ -163,7 +185,10 @@ export async function getTtsStatus(): Promise<TTSStatus> {
   return response.json();
 }
 
-export function connectEventStream(onSelection: (event: SelectionEvent) => void) {
+export function connectEventStream(
+  onSelection: (event: SelectionEvent) => void,
+  onPlayback?: (event: PlaybackUpdate) => void
+) {
   let stopped = false;
   let socket: WebSocket | null = null;
   let reconnectTimer: number | undefined;
@@ -172,10 +197,19 @@ export function connectEventStream(onSelection: (event: SelectionEvent) => void)
     if (stopped) return;
 
     socket = new WebSocket(`${WS_BASE}/ws/events`);
+    socket.onopen = () => {
+      if (onPlayback) {
+        void getReadingSnapshot().then((state) => {
+          if (!stopped) onPlayback(state);
+        }).catch(() => undefined);
+      }
+    };
     socket.onmessage = (message) => {
-      const data = JSON.parse(message.data) as SelectionEvent;
+      const data = JSON.parse(message.data) as SelectionEvent | (PlaybackUpdate & { kind: "playback" });
       if (data.kind === "selection") {
         onSelection(data);
+      } else if (data.kind === "playback") {
+        onPlayback?.(data);
       }
     };
     socket.onclose = () => {

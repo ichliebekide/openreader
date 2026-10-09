@@ -7,6 +7,8 @@ from contextlib import suppress
 
 from ...models import VoiceProfile
 from ..base import AudioChunk
+from ..process_utils import read_error_tail
+from ..timing import WordMatcher
 
 
 class EdgeEngine:
@@ -32,7 +34,10 @@ class EdgeEngine:
             voice=profile.edge_voice,
             rate=self._rate(profile.length_scale),
             volume=self._volume(profile.volume),
+            boundary="WordBoundary",
         )
+        matcher = WordMatcher(text.strip())
+        pending_words = []
         process = await asyncio.create_subprocess_exec(
             ffmpeg,
             "-hide_banner",
@@ -59,6 +64,13 @@ class EdgeEngine:
         async def feed_decoder() -> None:
             try:
                 async for message in communicate.stream():
+                    if message["type"] == "WordBoundary":
+                        word = matcher.match(
+                            message["text"], message["offset"], message["duration"]
+                        )
+                        if word:
+                            pending_words.append(word)
+                        continue
                     if message["type"] != "audio":
                         continue
                     process.stdin.write(message["data"])
@@ -68,25 +80,30 @@ class EdgeEngine:
                     process.stdin.close()
 
         feeder = asyncio.create_task(feed_decoder(), name="openreader:edge-stream")
+        errors = asyncio.create_task(read_error_tail(process.stderr))
         try:
             while data := await process.stdout.read(8192):
+                words = tuple(pending_words)
+                pending_words.clear()
                 yield AudioChunk(
                     data=data,
                     sample_rate=self.sample_rate,
                     encoding="raw_s16le",
+                    words=words,
                 )
 
             await feeder
             await process.wait()
+            stderr = await errors
             if process.returncode != 0:
-                stderr = await process.stderr.read() if process.stderr else b""
                 detail = stderr.decode("utf-8", errors="ignore").strip()
                 raise RuntimeError(detail or "Microsoft voice decoder failed")
+            if pending_words:
+                yield AudioChunk(b"", self.sample_rate, "raw_s16le", words=tuple(pending_words))
         finally:
-            if not feeder.done():
-                feeder.cancel()
-                with suppress(asyncio.CancelledError):
-                    await feeder
+            feeder.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await feeder
             if not process.stdin.is_closing():
                 process.stdin.close()
             if process.returncode is None:
@@ -96,6 +113,9 @@ class EdgeEngine:
                 except TimeoutError:
                     process.kill()
                     await process.wait()
+            errors.cancel()
+            with suppress(asyncio.CancelledError):
+                await errors
 
     @staticmethod
     def _rate(length_scale: float) -> str:

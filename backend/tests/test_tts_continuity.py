@@ -49,21 +49,21 @@ class FakeProcess:
 
 def test_long_text_uses_one_playback_stream() -> None:
     async def run_test() -> None:
-        profile = VoiceProfile(id="piper-test", engine=TTSEngine.PIPER)
+        profile = VoiceProfile(id="edge-test", engine=TTSEngine.EDGE)
         settings = ReaderSettings(
-            backend_engine=TTSEngine.PIPER,
+            backend_engine=TTSEngine.EDGE,
             active_profile_id=profile.id,
             voice_profiles=[profile],
         )
         orchestrator = TTSOrchestrator(settings)
         engine = ChunkEngine()
         player = CollectingPlayer()
-        orchestrator.engines[TTSEngine.PIPER] = engine
+        orchestrator.engines[TTSEngine.EDGE] = engine
         orchestrator.player = player  # type: ignore[assignment]
 
         await orchestrator.speak(("Ein vollstaendiger deutscher Testsatz. " * 20).strip())
 
-        assert len(engine.sections) >= 2
+        assert len(engine.sections) == 1
         assert player.calls == 1
         assert len(player.chunks) == len(engine.sections)
 
@@ -79,6 +79,23 @@ def test_edge_has_no_internal_character_limit() -> None:
     )
 
     assert sections == [text]
+
+
+def test_piper_keeps_model_in_one_process_for_long_text() -> None:
+    async def run():
+        profile = VoiceProfile(id="piper-test", engine=TTSEngine.PIPER)
+        engine = ChunkEngine()
+        orchestrator = TTSOrchestrator(ReaderSettings(
+            backend_engine=TTSEngine.PIPER, voice_profiles=[profile]
+        ))
+        orchestrator.engines[TTSEngine.PIPER] = engine
+        orchestrator.player = CollectingPlayer()
+        text = ("Ein sehr langer Text ohne Abschneiden. " * 1000).strip()
+        await orchestrator.speak(text)
+        assert engine.sections == [text]
+        assert orchestrator.player.calls == 1
+
+    asyncio.run(run())
 
 
 def test_player_reuses_raw_process_for_matching_format(monkeypatch) -> None:

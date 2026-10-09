@@ -23,9 +23,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-qwen = [
-  "qwen-tts>=0.1.1"
-]
 dev = [
   "ruff>=0.6",
   "pytest>=8.3",

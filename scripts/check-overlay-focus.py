@@ -15,7 +15,8 @@ from dbus.mainloop.glib import DBusGMainLoop
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 
 def main() -> int:
@@ -64,6 +65,9 @@ def main() -> int:
         nonlocal armed
         armed = True
         entry.select_region(start, end)
+        # Re-offer PRIMARY explicitly: changing an already-owned GtkEntry
+        # selection alone does not always announce a new Wayland offer.
+        Gtk.Clipboard.get(Gdk.SELECTION_PRIMARY).set_text(entry.get_text()[start:end], -1)
         return False
 
     GLib.timeout_add(300, load_probe)
@@ -73,10 +77,18 @@ def main() -> int:
     try:
         Gtk.main()
         overlays = [r for r in reports if r["overlay"]]
+        positions = [r for r in overlays if r["kind"] == "overlay-position"]
         result = {
             "overlay_observations": len(overlays),
             "overlay_sizes": sorted({(r["width"], r["height"]) for r in overlays}),
             "overlay_maps": sum(r["kind"] == "overlay-added" for r in overlays),
+            "overlay_positions": [
+                {"x": r["x"], "y": r["y"], "expected": r["expected"]} for r in positions
+            ],
+            "overlay_at_pointer": bool(positions) and all(
+                r["x"] == r["expected"]["x"] and r["y"] == r["expected"]["y"]
+                for r in positions
+            ),
             "overlay_accepts_focus": any(r["wantsInput"] for r in overlays),
             "overlay_activations": sum(r["kind"] == "activation" for r in overlays),
             "overlay_matches_symbol_size": bool(overlays) and all(
@@ -92,6 +104,7 @@ def main() -> int:
             and not result["overlay_accepts_focus"]
             and not result["overlay_activations"]
             and result["overlay_matches_symbol_size"]
+            and result["overlay_at_pointer"]
             and not result["source_focus_losses"]
             and result["source_still_focused"]
             and result["main_accepts_focus"]

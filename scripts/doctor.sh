@@ -17,7 +17,8 @@ check python3
 check wl-paste
 check tesseract
 check piper
-check sox
+check ffmpeg
+check pw-cat
 if [ -x "backend/.venv/bin/piper" ]; then
   printf "ok   backend/.venv/bin/piper\n"
 else
@@ -31,13 +32,13 @@ fi
 check kpackagetool6
 check qdbus6
 if backend/.venv/bin/python - <<'PY' >/dev/null 2>&1
-import torch
-from qwen_tts import Qwen3TTSModel
+import edge_tts
+import sounddevice
 PY
 then
-  printf "ok   qwen-tts\n"
+  printf "ok   edge-tts / sounddevice\n"
 else
-  printf "miss qwen-tts\n"
+  printf "miss edge-tts / sounddevice\n"
 fi
 
 printf "session %s\n" "${XDG_SESSION_TYPE:-unknown}"

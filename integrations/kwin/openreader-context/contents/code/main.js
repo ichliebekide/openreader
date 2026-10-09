@@ -52,8 +52,12 @@ function outputAt(x, y) {
 }
 
 function applyOverlayPosition(win, target, attempt) {
+  // Ignore replies for an unmapped window or a newer selection request.
+  if (overlayWindows.indexOf(win) === -1 || text(win.caption) !== target.caption) {
+    return;
+  }
   var geometry = win.frameGeometry;
-  var screen = workspace.virtualScreenGeometry;
+  var screen = target.output ? target.output.geometry : null;
   if (target.output && win.output !== target.output) {
     workspace.sendClientToScreen(win, target.output);
   }
@@ -90,14 +94,23 @@ function positionOverlay(win) {
     return;
   }
 
-  var x = Number(match[1]);
-  var y = Number(match[2]);
+  // The title signals a new request. Backend coordinates may be absent or stale
+  // after a restart; only the compositor knows the current global pointer.
+  var pos = workspace.cursorPos;
+  if (!pos || !isFinite(pos.x) || !isFinite(pos.y)) {
+    return;
+  }
+  var output = outputAt(pos.x, pos.y);
+  if (!output) {
+    return;
+  }
   applyOverlayPosition(
     win,
     {
-      x: x,
-      y: y,
-      output: outputAt(x, y),
+      x: Math.round(pos.x) + 18,
+      y: Math.round(pos.y) + 18,
+      output: output,
+      caption: text(win.caption),
     },
     0
   );
@@ -203,6 +216,13 @@ workspace.windowActivated.connect(function () {
 
 workspace.windowAdded.connect(function (win) {
   configureOverlay(win);
+});
+
+workspace.windowRemoved.connect(function (win) {
+  var index = overlayWindows.indexOf(win);
+  if (index !== -1) {
+    overlayWindows.splice(index, 1);
+  }
 });
 
 var existingWindows = workspace.stackingOrder || [];
