@@ -557,6 +557,8 @@ pub struct ServerConfig {
     /// Executable providing `--selection-helper` (the Tauri binary or this backend).
     pub selection_helper: Option<PathBuf>,
     pub settings_path: Option<PathBuf>,
+    /// Selection monitor and D-Bus bridge (off in tests so they do not touch the session).
+    pub desktop_integration: bool,
 }
 
 impl ServerConfig {
@@ -571,6 +573,7 @@ impl ServerConfig {
                 .map(PathBuf::from)
                 .or_else(|| std::env::current_exe().ok()),
             settings_path: None,
+            desktop_integration: true,
         }
     }
 }
@@ -588,11 +591,23 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
         settings.selection_debounce_ms,
         config.selection_helper.clone(),
     );
+    let integration = config.desktop_integration;
     let monitor_task = tokio::spawn({
         let monitor = monitor.clone();
-        async move { monitor.run().await }
+        async move {
+            if integration {
+                monitor.run().await
+            }
+        }
     });
-    let bridge_task = tokio::spawn(run_dbus_bridge(app.desktop.clone()));
+    let bridge_task = tokio::spawn({
+        let desktop = app.desktop.clone();
+        async move {
+            if integration {
+                run_dbus_bridge(desktop).await
+            }
+        }
+    });
 
     let address: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(address).await?;

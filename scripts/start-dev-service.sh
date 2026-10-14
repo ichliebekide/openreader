@@ -7,8 +7,9 @@ NPM_BIN="$(command -v npm)"
 NODE_BIN_DIR="$(dirname "$(command -v node)")"
 RUNTIME_PATH="$NODE_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-if [ ! -x "$ROOT_DIR/backend/.venv/bin/python" ]; then
-  echo "Backend-Venv fehlt. Fuehre zuerst ./scripts/dev.sh aus." >&2
+BACKEND="${OPENREADER_BACKEND:-rust}"
+if [ "$BACKEND" = "python" ] && [ ! -x "$ROOT_DIR/backend/.venv/bin/python" ]; then
+  echo "Backend-Venv fehlt. Fuehre zuerst OPENREADER_BACKEND=python ./scripts/dev.sh aus." >&2
   exit 1
 fi
 
@@ -21,6 +22,7 @@ else
     --property=KillMode=mixed \
     --working-directory="$ROOT_DIR" \
     --setenv="PATH=$RUNTIME_PATH" \
+    --setenv="OPENREADER_BACKEND=$BACKEND" \
     --setenv="OPENREADER_PYTHON=$ROOT_DIR/backend/.venv/bin/python" \
     "$NPM_BIN" run app:dev
 fi

@@ -35,7 +35,12 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let config = openreader_backend::server::ServerConfig::from_env();
     let result = runtime.block_on(openreader_backend::server::serve(config, async {
-        let _ = tokio::signal::ctrl_c().await;
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
     }));
     if let Err(error) = result {
         eprintln!("OpenReader backend failed: {error:#}");

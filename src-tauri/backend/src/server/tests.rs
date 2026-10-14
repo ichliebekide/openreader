@@ -368,3 +368,33 @@ async fn settings_roundtrip_and_cors() {
     assert!(!is_local_origin("http://evil.example"));
     assert!(!is_local_origin("http://localhost.evil:80"));
 }
+
+#[test]
+fn background_server_serves_and_shuts_down() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut handle = spawn_background(ServerConfig {
+        host: "127.0.0.1".into(),
+        port,
+        selection_helper: None,
+        settings_path: Some(dir.path().join("settings.json")),
+        desktop_integration: false,
+    })
+    .unwrap();
+    let mut body = String::new();
+    for _ in 0..100 {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            use std::io::{Read, Write};
+            stream
+                .write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream.read_to_string(&mut body).unwrap();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(body.starts_with("HTTP/1.1 200"), "{body}");
+    assert!(body.contains("\"backend\":\"rust\""));
+    handle.shutdown();
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+}

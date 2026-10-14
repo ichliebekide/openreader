@@ -9,7 +9,7 @@ Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Wind
 - `xdg-desktop-portal` für Desktop-konforme Integrationen wie globale Shortcuts
 - optionales KWin-Skript für Cursorposition und aktive Fensterklasse
 - Tauri/Rust für Desktop-App, Tray und Overlay-Fenster
-- Python/FastAPI für Selection-Monitoring, TTS, OCR und Dokument-Extraktion
+- ein natives Rust-Backend (axum) für Selection-Monitoring, TTS, OCR und Dokument-Extraktion
 
 ## Projektstruktur
 
@@ -17,7 +17,8 @@ Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Wind
 OpenReader/
   src/                         Tauri/Vite/React UI
   src-tauri/                   Rust Desktop Shell, Tray, Overlay Window
-  backend/openreader_backend/  FastAPI Services und TTS Pipeline
+  src-tauri/backend/           Rust-Backend (API, TTS, Selection, Dokumente)
+  backend/openreader_backend/  Legacy-Python-Backend (Fallback, wird entfernt)
   integrations/kwin/           KDE/KWin Context Bridge
   docs/                        Architektur, Wayland, Packaging, Roadmap
   scripts/                     Dev, Packaging und Diagnose
@@ -29,12 +30,14 @@ OpenReader/
 OpenReader ist absichtlich zweigeteilt:
 
 - Frontend: Tauri-App mit Hauptfenster, transparentem Overlay und Tray.
-- Backend: lokaler FastAPI-Dienst auf `127.0.0.1:8765`.
+- Backend: lokaler HTTP/WebSocket-Dienst auf `127.0.0.1:8765`, in Rust,
+  standardmaessig im Tauri-Prozess (`OPENREADER_BACKEND=python` startet das
+  alte Python-Backend). Siehe [docs/RUST_BACKEND.md](docs/RUST_BACKEND.md).
 
 Der Backend-Dienst beobachtet unter aktuellem KDE/KWin die PRIMARY Selection
 ereignisgesteuert ueber `ext-data-control-v1`. Die Tauri-Binaerdatei besitzt
 dafuer einen kleinen Rust-Modus `--selection-helper`, dessen Textframes das
-Python-Backend liest. Es laufen weder `wl-paste --watch` noch Selection-Polling.
+Backend liest. Es laufen weder `wl-paste --watch` noch Selection-Polling.
 Auf aelteren KDE-Versionen bleibt Klipper D-Bus der Fallback. Kurze Aenderungen
 werden debounced und unerwuenschte Kontexte gefiltert. Wenn genug Text erkannt
 wurde, sendet das Backend ein Selection-Event per WebSocket an die Tauri-App.
@@ -51,8 +54,8 @@ sudo apt install -y \
   build-essential curl file libwebkit2gtk-4.1-dev librsvg2-dev \
   libayatana-appindicator3-dev libsoup-3.0-dev javascriptcoregtk-4.1 \
   wl-clipboard xdg-desktop-portal xdg-desktop-portal-kde \
-  tesseract-ocr python3 python3-venv python3-pip \
-  pipewire-bin pipewire-alsa libportaudio2
+  tesseract-ocr poppler-utils ffmpeg libasound2-dev \
+  pipewire-bin pipewire-alsa
 ```
 
 Optional:
@@ -75,7 +78,17 @@ Piper einrichten:
 ./scripts/dev.sh
 ```
 
-`scripts/dev.sh` erstellt eine Python-venv, installiert den Backend-Dienst editierbar und startet anschließend Tauri.
+`scripts/dev.sh` startet Tauri mit dem Rust-Backend im App-Prozess. Mit
+`OPENREADER_BACKEND=python ./scripts/dev.sh` wird stattdessen wie frueher eine
+Python-venv eingerichtet und das Python-Backend gestartet.
+
+Backend allein (ohne UI) und Tests:
+
+```bash
+npm run backend                  # openreader-backend auf 127.0.0.1:8765
+cd src-tauri && cargo test       # Rust-Tests inkl. Bindings-Drift-Check
+npm run bindings                 # TypeScript-Typen aus Rust neu erzeugen
+```
 
 Fuer einen vom Terminal unabhaengigen Entwicklungsstart:
 
@@ -101,19 +114,20 @@ Der Prozess laeuft dann als `openreader-dev.service` im Benutzerkontext weiter.
 Microsoft Seraphina (online):
 
 - `de-DE-SeraphinaMultilingualNeural`
-- Engine-Datei: `backend/openreader_backend/tts/engines/edge_engine.py`
-- streamt ueber `edge-tts`, `ffmpeg` und PipeWire; kein Windows/SAPI noetig
+- Engine: `src-tauri/backend/src/tts/edge/` (nativer Port von edge-tts 7.3.1)
+- streamt ueber Websocket, `ffmpeg` und PipeWire; kein Windows/SAPI noetig
 - benoetigt eine Internetverbindung, aber keinen JSON2Video-Account
 
 Piper (offline):
 
 - Piper CLI mit `--output-raw`
-- Engine-Datei: `backend/openreader_backend/tts/engines/piper_engine.py`
+- Engine: `src-tauri/backend/src/tts/piper.rs`
 - Setup: `./scripts/setup-tts.sh`
 
 Neue Installationen starten mit Piper. Eine Online-Stimme wird niemals automatisch
 als Ersatz fuer eine lokale Stimme verwendet. Fehler werden angezeigt, nicht
-durch Testtoene ersetzt. Wortmarkierung ist fuer Seraphina verfuegbar.
+durch Testtoene ersetzt. Ein Fallback auf eine andere Stimme wird in der GUI
+angezeigt. Wortmarkierung ist fuer Seraphina verfuegbar.
 
 Details: [docs/TTS.md](docs/TTS.md)
 

@@ -14,6 +14,10 @@ Neue Installationen verwenden Piper. Microsoft wird nie automatisch als Fallback
 einer lokalen Stimme verwendet. Ein Fehler bleibt sichtbar, wenn auch die
 verfuegbaren Piper-Profile scheitern; es gibt keinen Testton als Ersatz.
 
+Jeder Fallback ist sichtbar: Das Rust-Backend sendet ein WebSocket-Event
+`tts_fallback` (fehlgeschlagene Stimme, Fehler, Ersatzstimme) und setzt `notice`
+im Wiedergabezustand; die GUI zeigt den Hinweis unter den Wiedergabeknoepfen.
+
 Status:
 
 ```bash
@@ -31,18 +35,19 @@ curl -X POST http://127.0.0.1:8765/api/tts/test \
 ## Wiedergabesteuerung
 
 Lokale Engines verwenden einen kontrollierbaren `pw-cat`-Prozess pro Vorlesung.
-WAV-Chunks werden mit libsndfile in PCM dekodiert. Microsoft Natural verwendet
-im App-Backend einen eigenen, abbrechbaren Sounddevice/PortAudio-Callbackstream
-ueber PipeWire oder PulseAudio, damit die Audioausgabe eine abfragbare Uhr hat.
-Dieser Stream greift nicht exklusiv auf ein ALSA-Hardwaregeraet zu.
-`pipewire-bin` und `libportaudio2` werden fuer diese Ausgabepfade benoetigt.
+WAV-Chunks werden in PCM dekodiert (hound). Microsoft Natural verwendet
+im App-Backend einen eigenen, abbrechbaren Ausgabestrom auf dem ALSA-PCM
+`pipewire` (Fallback `pulse`), damit die Audioausgabe eine abfragbare Uhr hat.
+Diese PCMs werden per Name geoeffnet; Hardwaregeraete werden weder geoeffnet
+noch abgefragt. `pipewire-bin` und `pipewire-alsa` werden fuer diese
+Ausgabepfade benoetigt.
 
 - `POST /api/tts/pause`: Ausgabe anhalten, laufende Anfrage behalten.
 - `POST /api/tts/resume`: dieselbe Anfrage fortsetzen.
 - `POST /api/tts/stop`: Anfrage abbrechen und eigenen Player beenden.
 - `GET /api/tts/playback`: `speaking`, `paused`, `error`, Session/Revision und Wortbereich.
 - `GET /api/tts/reading`: zusaetzlich der Text der laufenden Vorlesung, fuer Start/Reconnect.
-- WebSocket `/ws/events`: `selection` und `playback`; Wortereignisse ohne wiederholten Volltext.
+- WebSocket `/ws/events`: `selection`, `playback` und `tts_fallback`; Wortereignisse ohne wiederholten Volltext.
 
 `speaking=true` bedeutet eine aktive Anfrage, auch waehrend einer Pause.
 Bei lokalen Engines stoppt Pause nur den eigenen Playerprozess (SIGSTOP),
@@ -67,8 +72,9 @@ Die API wartet zusaetzlich auf die Bereinigung der jeweiligen Engine.
   420-Zeichen-Abschnitt. Kleinere Eingabezeilen gehen an denselben Prozess;
   dessen stdout und stderr werden gleichzeitig gelesen. Das vermeidet die
   bisherigen Neustartpausen, nicht jede moegliche Syntheseverzoegerung.
-- Seraphina: eine OpenReader-Anfrage fuer den ganzen Text; `edge-tts` teilt
-  intern nach maximal 4096 UTF-8-Bytes des XML-escaped Textes. Das sind keine
+- Seraphina: eine OpenReader-Anfrage fuer den ganzen Text; der Edge-Client
+  (Rust-Port von edge-tts 7.3.1) teilt intern nach maximal 4096 UTF-8-Bytes
+  des XML-escaped Textes. Das sind keine
   4096 Zeichen und kein Abschneiden. Folgende Dienstanfragen koennen warten.
 - Der neue getaktete Microsoft-Player hat maximal 12 PCM-Bloecke zu je 20 ms
   in seiner Ausgabequeue. Er startet mit dem ersten Block, ohne auf einen
@@ -76,8 +82,8 @@ Die API wartet zusaetzlich auf die Bereinigung der jeweiligen Engine.
   Pipes und Audiosystem haben weitere begrenzte Puffer. Es ist nicht korrekt,
   die gesamte Pipeline als pufferfrei oder insgesamt nur 240 ms gross zu bezeichnen.
 - Wortmarkierung nutzt echte `WordBoundary`-Offsets und -Dauern. Ausgezaehlt
-  werden konsumierte Sprachsamples anhand von `outputBufferDacTime` und
-  `stream.time`. Stille bei Pause/Unterversorgung zaehlt nicht als Textfortschritt.
+  werden konsumierte Sprachsamples anhand der DAC-Zeit (`snd_pcm_delay`
+  beim Schreiben jedes Blocks) und einer monotonen Uhr. Stille bei Pause/Unterversorgung zaehlt nicht als Textfortschritt.
   Die Genauigkeit haengt auch von Dienst, MP3-Dekoder und Audiotreiber ab;
   es wird keine samplegenaue akustische Synchronitaet behauptet.
 - Wortpositionen sind UTF-16-Offsets fuer React, auch hinter Emoji. Unbekannte
@@ -93,7 +99,7 @@ Die API wartet zusaetzlich auf die Bereinigung der jeweiligen Engine.
   sind nicht gleichzeitig zusicherbar.
 
 Technische Quellen: [edge-tts Communicate](https://github.com/rany2/edge-tts/blob/master/src/edge_tts/communicate.py),
-[Sounddevice-Streamuhr und Callback](https://python-sounddevice.readthedocs.io/en/latest/api/streams.html).
+[ALSA snd_pcm_delay](https://www.alsa-project.org/alsa-doc/alsa-lib/group___p_c_m.html).
 
 Fallback ist nur vor dem ersten Audio eines Abschnitts erlaubt. Bei einem
 Fehler nach bereits ausgegebenem Audio wird abgebrochen und der Fehler in der
@@ -107,8 +113,9 @@ Das Profil `Microsoft Seraphina` verwendet die offizielle Azure-Stimmenkennung:
 de-DE-SeraphinaMultilingualNeural
 ```
 
-OpenReader greift ueber das plattformunabhaengige Python-Paket `edge-tts` auf
-Microsoft Edge Read Aloud zu. Es wird kein Windows-SAPI-Adapter, Azure-Key oder
+OpenReader greift mit einem nativen Rust-Client (Port von edge-tts 7.3.1:
+Websocket, `Sec-MS-GEC`-Token mit `Sec-MS-GEC-Version=2-143.0.3650.75`,
+Uhrkorrektur bei HTTP 403) auf Microsoft Edge Read Aloud zu. Es wird kein Windows-SAPI-Adapter, Azure-Key oder
 JSON2Video-Account benoetigt. Die Engine braucht eine Internetverbindung und ist
 von der Verfuegbarkeit des Microsoft-Dienstes abhaengig.
 
@@ -131,7 +138,10 @@ Einrichten:
 ./scripts/setup-tts.sh
 ```
 
-Das Script installiert `piper-tts` in `backend/.venv` und lädt die deutsche Stimme:
+Das Script installiert `piper-tts` in `backend/.venv` und lädt die deutsche Stimme.
+Das Rust-Backend sucht die Piper-CLI in dieser Reihenfolge: `$OPENREADER_PIPER`,
+`backend/.venv/bin/piper`, `piper` im `PATH`, `~/.local/share/openreader/piper/piper`.
+Die Abtastrate des Rohaudios kommt aus der Stimmen-Konfiguration (`*.onnx.json`).
 
 ```text
 ~/.cache/openreader/voices/piper/de_DE-thorsten-medium/

@@ -13,16 +13,16 @@ check rustc
 check cargo
 check node
 check npm
-check python3
 check wl-paste
 check tesseract
+check pdftotext
 check piper
 check ffmpeg
 check pw-cat
 if [ -x "backend/.venv/bin/piper" ]; then
   printf "ok   backend/.venv/bin/piper\n"
 else
-  printf "miss backend/.venv/bin/piper\n"
+  printf "miss backend/.venv/bin/piper (or set OPENREADER_PIPER / install piper on PATH)\n"
 fi
 if [ -f "$HOME/.cache/openreader/voices/piper/de_DE-thorsten-medium/de_DE-thorsten-medium.onnx" ]; then
   printf "ok   piper de_DE-thorsten-medium voice\n"
@@ -31,14 +31,27 @@ else
 fi
 check kpackagetool6
 check qdbus6
-if backend/.venv/bin/python - <<'PY' >/dev/null 2>&1
+if command -v aplay >/dev/null 2>&1 && aplay -L 2>/dev/null | grep -qx 'pipewire'; then
+  printf "ok   ALSA pipewire PCM (word highlighting output)\n"
+elif command -v aplay >/dev/null 2>&1 && aplay -L 2>/dev/null | grep -qx 'pulse'; then
+  printf "ok   ALSA pulse PCM (word highlighting output)\n"
+else
+  printf "miss ALSA pipewire/pulse PCM (package pipewire-alsa)\n"
+fi
+
+# Only needed for the legacy backend (OPENREADER_BACKEND=python).
+if [ "${OPENREADER_BACKEND:-rust}" = "python" ]; then
+  check python3
+  if backend/.venv/bin/python - <<'PY' >/dev/null 2>&1
 import edge_tts
 import sounddevice
 PY
-then
-  printf "ok   edge-tts / sounddevice\n"
-else
-  printf "miss edge-tts / sounddevice\n"
+  then
+    printf "ok   edge-tts / sounddevice\n"
+  else
+    printf "miss edge-tts / sounddevice\n"
+  fi
 fi
 
+printf "backend %s\n" "${OPENREADER_BACKEND:-rust}"
 printf "session %s\n" "${XDG_SESSION_TYPE:-unknown}"
