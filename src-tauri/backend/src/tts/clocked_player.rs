@@ -2,8 +2,8 @@
 //! engines that deliver word timings (Microsoft/Seraphina).
 //!
 //! Python used a PortAudio callback stream (sounddevice) on the `pipewire`
-//! ALSA device or a PulseAudio device. The Rust port uses cpal's ALSA host on
-//! the same `pipewire` (or `pulse`) PCM; never an exclusive hardware device.
+//! ALSA device or a PulseAudio device. The Rust port writes to the same ALSA
+//! `pipewire` (or `pulse`) PCM by name; never an exclusive hardware device.
 //! At most 12 blocks of 20 ms are queued; only consumed PCM advances media
 //! time, so silence during pause or starvation does not move the highlight.
 
@@ -178,7 +178,7 @@ impl OutputShared {
     }
 }
 
-/// A started/abortable PCM output (cpal stream or a test fake). Dropping it aborts and closes.
+/// A started/abortable PCM output (ALSA mixer PCM or a test fake). Dropping it aborts and closes.
 pub trait PcmOutput: Send {
     fn start(&mut self) -> Result<()>;
     fn is_active(&self) -> bool;
@@ -201,7 +201,7 @@ pub struct ClockedAudioPlayer {
 
 impl ClockedAudioPlayer {
     pub fn new(on_progress: ProgressCallback) -> Self {
-        Self::with_factory(on_progress, Arc::new(CpalFactory))
+        Self::with_factory(on_progress, Arc::new(AlsaFactory))
     }
 
     pub fn with_factory(on_progress: ProgressCallback, factory: Arc<dyn PcmOutputFactory>) -> Self {
@@ -402,119 +402,140 @@ impl Drop for CloseOutput {
     }
 }
 
-// ------------------------------------------------------------------- cpal
+// ------------------------------------------------------------------- ALSA
 
-pub struct CpalFactory;
+/// Plays through the ALSA `pipewire` PCM (pipewire-alsa), falling back to
+/// `pulse`. Only these mixer PCMs are opened, by name; hardware devices are
+/// never opened or probed (Python: "never open an exclusive ALSA hardware
+/// device behind the desktop mixer").
+pub struct AlsaFactory;
 
-enum Command {
+pub const MIXER_PCMS: [&str; 2] = ["pipewire", "pulse"];
+
+enum AlsaCommand {
     Start,
 }
 
-struct CpalOutput {
-    commands: std::sync::mpsc::Sender<Command>,
-    started_ok: std::sync::mpsc::Receiver<Result<(), String>>,
+struct AlsaOutput {
+    commands: Option<std::sync::mpsc::Sender<AlsaCommand>>,
+    abort: Arc<AtomicBool>,
+    started: bool,
     base: Instant,
     shared: Arc<OutputShared>,
-    started: bool,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Pick the desktop mixer: ALSA `pipewire` PCM, then `pulse`. Never a raw hw device.
-fn select_device(host: &cpal::Host) -> Result<cpal::Device> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-    let devices: Vec<cpal::Device> = host.output_devices()?.collect();
-    for wanted in ["pipewire", "pulse"] {
-        if let Some(device) = devices.iter().find(|device| device.name().is_ok_and(|name| name == wanted)) {
-            return Ok(device.clone());
+fn open_mixer_pcm(sample_rate: u32, channels: u16, block_frames: usize) -> Result<alsa::PCM> {
+    use alsa::pcm::{Access, Format, HwParams};
+    use alsa::{Direction, ValueOr};
+
+    let mut last_error = None;
+    for name in MIXER_PCMS {
+        let attempt = (|| -> Result<alsa::PCM> {
+            let pcm = alsa::PCM::new(name, Direction::Playback, false)?;
+            {
+                let hw = HwParams::any(&pcm)?;
+                hw.set_channels(channels as u32)?;
+                hw.set_rate(sample_rate, ValueOr::Nearest)?;
+                hw.set_format(Format::s16())?;
+                hw.set_access(Access::RWInterleaved)?;
+                hw.set_period_size_near(block_frames as alsa::pcm::Frames, ValueOr::Nearest)?;
+                hw.set_buffer_size_near((block_frames * 4) as alsa::pcm::Frames)?;
+                pcm.hw_params(&hw)?;
+                let rate = hw.get_rate()?;
+                if rate != sample_rate {
+                    bail!("{name}: sample rate {sample_rate} not supported (got {rate})");
+                }
+            }
+            {
+                let sw = pcm.sw_params_current()?;
+                sw.set_start_threshold(block_frames as alsa::pcm::Frames)?;
+                pcm.sw_params(&sw)?;
+            }
+            Ok(pcm)
+        })();
+        match attempt {
+            Ok(pcm) => return Ok(pcm),
+            Err(error) => last_error = Some(error),
         }
     }
+    tracing::info!("no mixer PCM for timed playback: {last_error:?}");
     bail!("Wortmarkierung benoetigt eine PipeWire- oder PulseAudio-Ausgabe.")
 }
 
-impl PcmOutputFactory for CpalFactory {
+impl PcmOutputFactory for AlsaFactory {
     fn open(&self, sample_rate: u32, channels: u16, block_frames: usize, shared: Arc<OutputShared>) -> Result<Box<dyn PcmOutput>> {
-        use cpal::traits::{DeviceTrait, StreamTrait};
-
         let base = Instant::now();
-        let (command_tx, command_rx) = std::sync::mpsc::channel::<Command>();
+        let abort = Arc::new(AtomicBool::new(false));
+        let (command_tx, command_rx) = std::sync::mpsc::channel::<AlsaCommand>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-        let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-        let callback_shared = shared.clone();
-        let error_shared = shared.clone();
-        // cpal streams are not `Send`; the stream lives on its own thread.
-        std::thread::Builder::new()
+        let thread_shared = shared.clone();
+        let thread_abort = abort.clone();
+        let thread = std::thread::Builder::new()
             .name("openreader-audio".into())
             .spawn(move || {
-                let build = || -> Result<cpal::Stream> {
-                    let host = cpal::default_host();
-                    let device = select_device(&host)?;
-                    let data_callback = move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
-                        let timestamp = info.timestamp();
-                        let delay = timestamp
-                            .playback
-                            .duration_since(&timestamp.callback)
-                            .unwrap_or_default();
-                        let now = base.elapsed().as_secs_f64();
-                        callback_shared.fill(data, now + delay.as_secs_f64());
-                    };
-                    let error_callback = move |error: cpal::StreamError| error_shared.set_error(error.to_string());
-                    let fixed = cpal::StreamConfig {
-                        channels,
-                        sample_rate: cpal::SampleRate(sample_rate),
-                        buffer_size: cpal::BufferSize::Fixed(block_frames as u32),
-                    };
-                    match device.build_output_stream(&fixed, data_callback.clone(), error_callback.clone(), None) {
-                        Ok(stream) => Ok(stream),
-                        Err(_) => {
-                            let config = cpal::StreamConfig {
-                                buffer_size: cpal::BufferSize::Default,
-                                ..fixed
-                            };
-                            Ok(device.build_output_stream(&config, data_callback, error_callback, None)?)
-                        }
-                    }
-                };
-                let stream = match build() {
-                    Ok(stream) => {
-                        let _ = ready_tx.send(Ok(()));
-                        stream
-                    }
+                let pcm = match open_mixer_pcm(sample_rate, channels, block_frames) {
+                    Ok(pcm) => pcm,
                     Err(error) => {
                         let _ = ready_tx.send(Err(error.to_string()));
                         return;
                     }
                 };
-                while let Ok(command) = command_rx.recv() {
-                    match command {
-                        Command::Start => {
-                            let _ = started_tx.send(stream.play().map_err(|error| error.to_string()));
+                let io = match pcm.io_i16() {
+                    Ok(io) => io,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error.to_string()));
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(()));
+                if !matches!(command_rx.recv(), Ok(AlsaCommand::Start)) {
+                    let _ = pcm.drop();
+                    return;
+                }
+                let mut buffer = vec![0i16; block_frames * channels as usize];
+                while !thread_abort.load(Ordering::SeqCst) {
+                    // Frames already queued in front of this block -> its DAC time.
+                    let delay = pcm.delay().unwrap_or(0).max(0) as f64 / sample_rate as f64;
+                    thread_shared.fill(&mut buffer, base.elapsed().as_secs_f64() + delay);
+                    let mut offset = 0;
+                    while offset < buffer.len() && !thread_abort.load(Ordering::SeqCst) {
+                        match io.writei(&buffer[offset..]) {
+                            Ok(frames) => offset += frames * channels as usize,
+                            Err(error) => {
+                                if let Err(error) = pcm.try_recover(error, true) {
+                                    thread_shared.set_error(format!("Audioausgabe fehlgeschlagen: {error}"));
+                                    let _ = pcm.drop();
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
-                // Sender dropped: abort and close.
-                let _ = stream.pause();
-                drop(stream);
+                let _ = pcm.drop();
             })?;
         ready_rx
             .recv()
             .map_err(|_| anyhow!("audio thread exited"))?
             .map_err(|error| anyhow!(error))?;
-        Ok(Box::new(CpalOutput {
-            commands: command_tx,
-            started_ok: started_rx,
+        Ok(Box::new(AlsaOutput {
+            commands: Some(command_tx),
+            abort,
+            started: false,
             base,
             shared,
-            started: false,
+            thread: Some(thread),
         }))
     }
 }
 
-impl PcmOutput for CpalOutput {
+impl PcmOutput for AlsaOutput {
     fn start(&mut self) -> Result<()> {
-        self.commands.send(Command::Start).map_err(|_| anyhow!("audio thread exited"))?;
-        self.started_ok
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| anyhow!("audio output did not start"))?
-            .map_err(|error| anyhow!(error))?;
+        self.commands
+            .as_ref()
+            .ok_or_else(|| anyhow!("audio output closed"))?
+            .send(AlsaCommand::Start)
+            .map_err(|_| anyhow!("audio thread exited"))?;
         self.started = true;
         Ok(())
     }
@@ -525,6 +546,17 @@ impl PcmOutput for CpalOutput {
 
     fn time(&self) -> f64 {
         self.base.elapsed().as_secs_f64()
+    }
+}
+
+impl Drop for AlsaOutput {
+    fn drop(&mut self) {
+        self.abort.store(true, Ordering::SeqCst);
+        self.commands.take();
+        if let Some(thread) = self.thread.take() {
+            // The writer blocks at most about one period (20 ms).
+            let _ = thread.join();
+        }
     }
 }
 

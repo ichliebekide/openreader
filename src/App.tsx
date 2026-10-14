@@ -32,15 +32,9 @@ import {
   type ReaderSettings,
   type PlaybackUpdate,
   type SelectionEvent,
-  type TTSStatus
+  type HealthResponse,
+  type TTSStatusResponse
 } from "./lib/backend";
-
-type Health = {
-  ok: boolean;
-  version: string;
-  engine: string;
-  wayland_session: boolean;
-};
 
 const defaultEvent: SelectionEvent = {
   kind: "selection",
@@ -67,9 +61,9 @@ function OverlayApp() {
 }
 
 function MainApp() {
-  const [health, setHealth] = useState<Health | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [settings, setSettings] = useState<ReaderSettings | null>(null);
-  const [ttsStatus, setTtsStatus] = useState<TTSStatus | null>(null);
+  const [ttsStatus, setTtsStatus] = useState<TTSStatusResponse | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [selection, setSelection] = useState<SelectionEvent>(defaultEvent);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -80,6 +74,7 @@ function MainApp() {
   const readingSessionRef = useRef<string | null>(null);
   const snapshotPendingRef = useRef(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
@@ -148,7 +143,9 @@ function MainApp() {
       const x = event.cursor_x ?? 48;
       const y = event.cursor_y ?? 48;
       void invoke("show_overlay", { x: x + 18, y: y + 18 });
-    }, applyPlaybackState);
+    }, applyPlaybackState, (fallback) => {
+      if (mountedRef.current) setPlaybackNotice(fallback.message);
+    });
 
     return () => {
       stopped = true;
@@ -210,6 +207,8 @@ function MainApp() {
     setIsSpeaking(state.speaking);
     setIsPaused(state.paused);
     setPlaybackError(state.error);
+    // `notice` (e.g. a TTS fallback) only exists in the Rust backend.
+    setPlaybackNotice(state.notice ?? null);
   }
 
   async function playbackCommand(command: () => Promise<void>) {
@@ -449,6 +448,9 @@ function MainApp() {
               </div>
               {(importError || playbackError) && (
                 <p className="reader-error" role="alert">{importError || playbackError}</p>
+              )}
+              {playbackNotice && !importError && !playbackError && (
+                <p className="reader-notice" role="status">{playbackNotice}</p>
               )}
             </div>
           </article>

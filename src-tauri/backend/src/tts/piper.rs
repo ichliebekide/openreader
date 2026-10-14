@@ -56,6 +56,21 @@ pub fn resolve_command() -> Result<PathBuf> {
     bail!("Piper CLI not found. Run `./scripts/setup-tts.sh --piper`.")
 }
 
+/// Sample rate of the raw output. The voice config (`audio.sample_rate`) wins
+/// over the profile value: the Python backend always used the profile value
+/// (22050 Hz), which played the 16 kHz voices (kerstin/ramona low) too fast.
+pub fn output_sample_rate(profile: &VoiceProfile) -> u32 {
+    profile
+        .piper_config_path
+        .as_ref()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .and_then(|config| config["audio"]["sample_rate"].as_u64())
+        .filter(|rate| (4000..=192_000).contains(rate))
+        .map(|rate| rate as u32)
+        .unwrap_or(profile.piper_sample_rate as u32)
+}
+
 pub fn piper_args(profile: &VoiceProfile) -> Vec<String> {
     let model = profile.piper_model_path.clone().unwrap_or_default();
     let mut args = vec![
@@ -109,6 +124,7 @@ impl Engine for PiperEngine {
             let mut stdout = child.child().stdout.take().expect("piped stdout");
             let stderr = child.child().stderr.take();
 
+            let sample_rate = output_sample_rate(&profile);
             let spoken = apply_pronunciations(text.trim());
             let sections = split_sentences(&spoken, 420)?;
             let feeder = AbortOnDrop(tokio::spawn(async move {
@@ -127,7 +143,7 @@ impl Engine for PiperEngine {
                 if count == 0 {
                     break;
                 }
-                yield AudioChunk::raw(buffer[..count].to_vec(), profile.piper_sample_rate as u32);
+                yield AudioChunk::raw(buffer[..count].to_vec(), sample_rate);
             }
 
             let status = child.wait().await?;
@@ -231,6 +247,45 @@ mod tests {
         let mut stream = PiperEngine::default().synthesize("Hallo".into(), profile);
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(error.to_string().contains("Piper model not found"));
+    }
+
+    /// Opt-in: real Piper CLI with every installed voice in ~/.cache/openreader/voices/piper.
+    #[tokio::test]
+    async fn real_piper_voices_smoke_test() {
+        if std::env::var("OPENREADER_TEST_PIPER").as_deref() != Ok("1") {
+            return;
+        }
+        let engine = PiperEngine::default();
+        for profile in crate::models::default_voice_profiles() {
+            if profile.engine != TtsEngine::Piper || !profile.piper_model_path.as_ref().unwrap().exists() {
+                continue;
+            }
+            let mut stream = engine.synthesize("Hallo, das ist OpenReader mit Piper.".into(), profile.clone());
+            let mut bytes = 0;
+            while let Some(chunk) = stream.next().await {
+                bytes += chunk.unwrap().data.len();
+            }
+            let rate = output_sample_rate(&profile);
+            let seconds = bytes as f64 / 2.0 / rate as f64;
+            eprintln!("piper smoke {}: {bytes} bytes ({seconds:.2} s at {rate} Hz)", profile.id);
+            assert!(seconds > 1.0);
+        }
+    }
+
+    #[test]
+    fn sample_rate_comes_from_voice_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("voice.onnx.json");
+        std::fs::write(&config, r#"{"audio": {"sample_rate": 16000}}"#).unwrap();
+        let mut profile = VoiceProfile {
+            piper_config_path: Some(config.clone()),
+            ..VoiceProfile::default()
+        };
+        assert_eq!(output_sample_rate(&profile), 16000);
+        std::fs::write(&config, "{}").unwrap();
+        assert_eq!(output_sample_rate(&profile), 22050);
+        profile.piper_config_path = None;
+        assert_eq!(output_sample_rate(&profile), 22050);
     }
 
     #[test]

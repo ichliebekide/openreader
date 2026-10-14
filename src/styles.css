@@ -303,12 +303,17 @@ h2 {
   padding: 0;
 }
 
-.reader-error {
+.reader-error,
+.reader-notice {
   color: #ffabab;
   font-size: 0.88rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
   margin: 12px 0 0;
+}
+
+.reader-notice {
+  color: #ffd58a;
 }
 
 .primary-action:hover,

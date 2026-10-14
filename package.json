@@ -11,7 +11,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "package:linux": "tauri build -- --bundles deb,appimage"
+    "package:linux": "tauri build -- --bundles deb,appimage",
+    "bindings": "cargo test --manifest-path src-tauri/Cargo.toml -p openreader-backend --lib bindings::tests::export_bindings -- --ignored --exact",
+    "bindings:check": "cargo test --manifest-path src-tauri/Cargo.toml -p openreader-backend --lib bindings::tests::bindings_are_up_to_date -- --exact",
+    "backend": "cargo run --manifest-path src-tauri/Cargo.toml -p openreader-backend"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

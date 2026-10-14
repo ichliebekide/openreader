@@ -31,7 +31,9 @@ impl FallbackNotice {
     pub fn message(&self) -> String {
         format!(
             "{} ist fehlgeschlagen ({}). Es wird {} verwendet.",
-            self.failed.label, self.error, self.fallback.label
+            self.failed.label,
+            self.error.trim_end_matches('.'),
+            self.fallback.label
         )
     }
 }

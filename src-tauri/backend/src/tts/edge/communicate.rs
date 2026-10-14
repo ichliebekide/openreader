@@ -279,6 +279,8 @@ enum ConnectError {
 }
 
 async fn connect() -> Result<Socket, ConnectError> {
+    // Several rustls providers can be compiled in (via other crates); pick ring explicitly.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let url = format!(
         "{WSS_URL}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}",
         connect_id(),
