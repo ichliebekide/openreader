@@ -1,0 +1,80 @@
+//! Native Rust port of the OpenReader Python backend.
+//!
+//! The crate serves the same REST/WebSocket API as `backend/openreader_backend`
+//! (FastAPI) so the React UI keeps working unchanged. It can run inside the
+//! Tauri process ([`server::spawn_background`]) or standalone through the
+//! `openreader-backend` binary.
+
+pub mod bindings;
+pub mod clipboard_monitor;
+pub mod desktop_context;
+pub mod documents;
+pub mod events;
+pub mod models;
+pub mod pronunciation;
+pub mod safety;
+#[cfg(target_os = "linux")]
+pub mod selection_wayland;
+pub mod server;
+pub mod settings;
+pub mod text;
+pub mod tts;
+
+pub const VERSION: &str = "0.1.0";
+
+/// Log to an append-only file (`~/.cache/openreader/backend.log` in the app),
+/// like the Python backend's stdout/stderr redirection. `RUST_LOG` overrides the level.
+pub fn init_file_logging(path: &std::path::Path) {
+    let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(file))
+        .try_init();
+}
+
+/// `$XDG_CONFIG_HOME` or `~/.config`, as Python's `Path(os.getenv(..., Path.home() / ".config"))`.
+pub fn config_home() -> std::path::PathBuf {
+    xdg_dir("XDG_CONFIG_HOME", ".config")
+}
+
+/// `$XDG_CACHE_HOME` or `~/.cache`.
+pub fn cache_home() -> std::path::PathBuf {
+    xdg_dir("XDG_CACHE_HOME", ".cache")
+}
+
+fn xdg_dir(variable: &str, fallback: &str) -> std::path::PathBuf {
+    match std::env::var_os(variable) {
+        Some(value) if !value.is_empty() => std::path::PathBuf::from(value),
+        _ => home_dir().join(fallback),
+    }
+}
+
+pub fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
+/// Locate an executable on `PATH` (like Python's `shutil.which`).
+pub fn which(command: &str) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let is_executable = |path: &std::path::Path| {
+        path.metadata()
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    };
+    if command.contains('/') {
+        let path = std::path::PathBuf::from(command);
+        return is_executable(&path).then_some(path);
+    }
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(command))
+        .find(|candidate| is_executable(candidate))
+}

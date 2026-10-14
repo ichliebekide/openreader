@@ -4,8 +4,6 @@
 mod overlay_focus;
 #[cfg(target_os = "linux")]
 mod overlay_input;
-#[cfg(target_os = "linux")]
-mod selection_wayland;
 
 use std::{
     fs::{create_dir_all, OpenOptions},
@@ -25,22 +23,72 @@ use tauri::{
     Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 
-struct BackendProcess(Mutex<Option<Child>>);
+/// The local API backend on 127.0.0.1:8765.
+///
+/// Default: the native Rust backend (`openreader-backend` crate) runs inside
+/// this process. `OPENREADER_BACKEND=python` starts the legacy Python/FastAPI
+/// backend instead; `OPENREADER_BACKEND=external` starts nothing (for a
+/// separately started `openreader-backend` binary or Python service).
+enum Backend {
+    Rust(openreader_backend::server::BackendHandle),
+    Python(Child),
+}
+
+struct BackendProcess(Mutex<Option<Backend>>);
 
 static OVERLAY_POSITION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl BackendProcess {
     fn stop(&self) {
-        if let Ok(mut process) = self.0.lock() {
-            stop_child(process.take());
+        if let Ok(mut backend) = self.0.lock() {
+            stop_backend(backend.take());
         }
     }
 }
 
 impl Drop for BackendProcess {
     fn drop(&mut self) {
-        if let Ok(process) = self.0.get_mut() {
-            stop_child(process.take());
+        if let Ok(backend) = self.0.get_mut() {
+            stop_backend(backend.take());
+        }
+    }
+}
+
+fn stop_backend(backend: Option<Backend>) {
+    match backend {
+        Some(Backend::Rust(mut handle)) => handle.shutdown(),
+        Some(Backend::Python(child)) => stop_child(Some(child)),
+        None => {}
+    }
+}
+
+fn start_backend(app: &tauri::AppHandle) -> Option<Backend> {
+    let mode = std::env::var("OPENREADER_BACKEND").unwrap_or_default().to_lowercase();
+    match mode.as_str() {
+        "python" => match spawn_backend(app) {
+            Ok(child) => Some(Backend::Python(child)),
+            Err(error) => {
+                eprintln!("OpenReader: {error}");
+                None
+            }
+        },
+        "external" | "none" => None,
+        _ => {
+            if let Some(log) = backend_log_path() {
+                openreader_backend::init_file_logging(&log);
+            }
+            let mut config = openreader_backend::server::ServerConfig::from_env();
+            #[cfg(target_os = "linux")]
+            if std::env::var_os("OPENREADER_SELECTION_HELPER").is_none() {
+                config.selection_helper = std::env::current_exe().ok();
+            }
+            match openreader_backend::server::spawn_background(config) {
+                Ok(handle) => Some(Backend::Rust(handle)),
+                Err(error) => {
+                    eprintln!("OpenReader: failed to start the Rust backend: {error}");
+                    None
+                }
+            }
         }
     }
 }
@@ -129,7 +177,7 @@ fn hide_overlay_window(window: &WebviewWindow) -> Result<(), String> {
 fn main() {
     #[cfg(target_os = "linux")]
     if std::env::args_os().any(|argument| argument == "--selection-helper") {
-        if let Err(error) = selection_wayland::run() {
+        if let Err(error) = openreader_backend::selection_wayland::run() {
             eprintln!("OpenReader selection helper failed: {error}");
             std::process::exit(1);
         }
@@ -145,8 +193,8 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "linux")]
             overlay_focus::ensure_kde_rule().map_err(std::io::Error::other)?;
-            let child = spawn_backend(app.handle()).ok();
-            app.manage(BackendProcess(Mutex::new(child)));
+            let backend = start_backend(app.handle());
+            app.manage(BackendProcess(Mutex::new(backend)));
             configure_overlay(app.get_webview_window("overlay"));
             create_tray(app)?;
             Ok(())
@@ -284,17 +332,20 @@ fn resolve_python(backend_dir: &std::path::Path) -> PathBuf {
     PathBuf::from("python3")
 }
 
-fn open_backend_log() -> Option<std::fs::File> {
+fn backend_log_path() -> Option<PathBuf> {
     let cache_home = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
     let dir = cache_home.join("openreader");
     create_dir_all(&dir).ok()?;
+    Some(dir.join("backend.log"))
+}
 
+fn open_backend_log() -> Option<std::fs::File> {
     OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("backend.log"))
+        .open(backend_log_path()?)
         .ok()
 }
 
