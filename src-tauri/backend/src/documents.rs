@@ -752,15 +752,15 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("text.png");
-        // Render via ImageMagick if present; otherwise skip silently.
-        let status = Command::new("convert")
-            .args(["-size", "1400x160", "xc:white", "-font", "DejaVu-Sans", "-pointsize", "40", "-fill", "black",
-                   "-annotate", "+30+90", "OpenReader reads selected text."])
+        // Render the text with ffmpeg's drawtext filter (ffmpeg is a runtime dependency anyway).
+        let status = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=white:s=1400x160"])
+            .args(["-frames:v", "1", "-vf"])
+            .arg("drawtext=text='OpenReader reads selected text.':fontcolor=black:fontsize=40:x=30:y=60")
             .arg(&path)
-            .status();
-        if !status.map(|status| status.success()).unwrap_or(false) {
-            return;
-        }
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
         let text = DocumentService::default().extract_text(&path, "English").unwrap();
         assert_eq!(text, "OpenReader reads selected text.");
     }

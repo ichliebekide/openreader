@@ -124,7 +124,7 @@ cargo test                      # alle Unit-/API-Tests, inkl. Bindings-Drift
 OPENREADER_TEST_EDGE=1 cargo test -p openreader-backend real_service_smoke_test -- --nocapture
 OPENREADER_TEST_PIPER=1 OPENREADER_PIPER=/pfad/zu/piper cargo test -p openreader-backend real_piper -- --nocapture
 OPENREADER_TEST_PIPEWIRE=1 cargo test -p openreader-backend real_ -- --test-threads=1   # sendet nur Stille
-OPENREADER_TEST_OCR=1 cargo test -p openreader-backend real_tesseract
+OPENREADER_TEST_OCR=1 cargo test -p openreader-backend real_tesseract    # braucht tesseract-ocr-eng
 ```
 
 Die Python-Tests aus `backend/tests/` sind als Rust-Tests portiert
