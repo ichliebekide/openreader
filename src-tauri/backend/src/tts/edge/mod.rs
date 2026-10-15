@@ -2,22 +2,19 @@
 //!
 //! Port of `tts/engines/edge_engine.py` on top of a port of edge-tts 7.3.1:
 //! websocket to speech.platform.bing.com, Sec-MS-GEC token, SSML with
-//! rate/volume, WordBoundary metadata matched to the text, and MP3 decoded to
-//! 24 kHz mono s16le by an `ffmpeg` subprocess (as before).
+//! rate/volume, WordBoundary metadata matched to the text, and the MP3 stream
+//! decoded in-process by symphonia ([`mp3`]).
 
 pub mod communicate;
 pub mod drm;
+pub mod mp3;
 
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
 
-use super::process::{read_error_tail, AbortOnDrop, ChildGuard};
+use super::process::AbortOnDrop;
 use super::timing::WordMatcher;
 use super::{AudioChunk, ChunkStream, Engine, WordBoundary};
 use crate::models::VoiceProfile;
@@ -30,6 +27,7 @@ pub const CHROMIUM_FULL_VERSION: &str = "143.0.3650.75";
 /// Version sent with the token; older values are rejected with HTTP 403.
 pub const SEC_MS_GEC_VERSION: &str = "2-143.0.3650.75";
 
+/// Output format requested from the service: `audio-24khz-48kbitrate-mono-mp3`.
 pub const SAMPLE_RATE: u32 = 24_000;
 
 /// Python `f"{round(x):+d}%"` (banker's rounding).
@@ -53,14 +51,12 @@ pub type EdgeSource =
 #[derive(Clone)]
 pub struct EdgeEngine {
     pub source: EdgeSource,
-    pub ffmpeg: Option<std::path::PathBuf>,
 }
 
 impl Default for EdgeEngine {
     fn default() -> Self {
         Self {
             source: Arc::new(|text, config| communicate::communicate(&text, config).boxed()),
-            ffmpeg: None,
         }
     }
 }
@@ -68,76 +64,58 @@ impl Default for EdgeEngine {
 impl Engine for EdgeEngine {
     fn synthesize(&self, text: String, profile: VoiceProfile) -> ChunkStream {
         let source = self.source.clone();
-        let ffmpeg_override = self.ffmpeg.clone();
         Box::pin(async_stream::try_stream! {
             let voice = profile
                 .edge_voice
                 .clone()
                 .filter(|voice| !voice.is_empty())
                 .ok_or_else(|| anyhow!("Microsoft voice profile has no Edge voice configured"))?;
-            let ffmpeg = ffmpeg_override
-                .or_else(|| crate::which("ffmpeg"))
-                .ok_or_else(|| anyhow!("ffmpeg is required for Microsoft voice streaming"))?;
             let text = text.trim().to_string();
             let config = TtsConfig::new(&voice, &rate(profile.length_scale), &volume(profile.volume), "+0Hz", true)?;
 
-            let child = Command::new(&ffmpeg)
-                .args(["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le"])
-                .args(["-ar", &SAMPLE_RATE.to_string(), "-ac", "1", "pipe:1"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|error| anyhow!("ffmpeg konnte nicht gestartet werden: {error}"))?;
-            let mut child = ChildGuard::new(child, Duration::from_millis(600));
-            let mut stdin = child.child().stdin.take().expect("piped stdin");
-            let mut stdout = child.child().stdout.take().expect("piped stdout");
-            let stderr = child.child().stderr.take();
-
+            let (mp3_input, mut pcm) = mp3::spawn_decoder();
             let pending: Arc<Mutex<Vec<WordBoundary>>> = Arc::default();
             let mut messages = source(text.clone(), config);
             let feeder_words = pending.clone();
             let mut feeder = AbortOnDrop(tokio::spawn(async move {
                 let mut matcher = WordMatcher::new(text);
-                let result: Result<()> = async {
-                    while let Some(message) = messages.next().await {
-                        match message? {
-                            EdgeMessage::Boundary { kind, offset, duration, text } if kind == "WordBoundary" => {
-                                if let Some(word) = matcher.match_word(&text, offset, duration) {
-                                    feeder_words.lock().unwrap().push(word);
-                                }
+                let mut input = Some(mp3_input);
+                while let Some(message) = messages.next().await {
+                    match message? {
+                        EdgeMessage::Boundary { kind, offset, duration, text } if kind == "WordBoundary" => {
+                            if let Some(word) = matcher.match_word(&text, offset, duration) {
+                                feeder_words.lock().unwrap().push(word);
                             }
-                            EdgeMessage::Boundary { .. } => {}
-                            EdgeMessage::Audio(data) => stdin.write_all(&data).await?,
+                        }
+                        EdgeMessage::Boundary { .. } => {}
+                        EdgeMessage::Audio(data) => {
+                            if input.as_ref().is_some_and(|input| input.send(data).is_err()) {
+                                input = None; // decoder stopped; its error is reported below
+                            }
                         }
                     }
-                    Ok(())
                 }
-                .await;
-                let _ = stdin.shutdown().await;
-                drop(stdin);
-                result
+                // Dropping the sender ends the MP3 stream.
+                anyhow::Ok(())
             }));
-            let mut errors = AbortOnDrop(tokio::spawn(read_error_tail(stderr)));
 
-            let mut buffer = vec![0u8; 8192];
-            loop {
-                let count = stdout.read(&mut buffer).await?;
-                if count == 0 {
-                    break;
-                }
+            while let Some(block) = pcm.recv().await {
+                let (samples, sample_rate, channels) = match block {
+                    Ok(block) => block,
+                    Err(decoder_error) => {
+                        // A broken service stream explains a decoder error better.
+                        (&mut feeder.0).await.map_err(|error| anyhow!("Edge stream task failed: {error}"))??;
+                        Err(decoder_error)?
+                    }
+                };
+                let samples = mp3::to_mono(samples, channels);
                 let words = std::mem::take(&mut *pending.lock().unwrap());
-                yield AudioChunk::raw(buffer[..count].to_vec(), SAMPLE_RATE).with_words(words);
+                let data: Vec<u8> = samples.iter().flat_map(|sample| sample.to_le_bytes()).collect();
+                yield AudioChunk::raw(data, sample_rate).with_words(words);
             }
 
-            // The service error is more useful than a decoder error caused by it.
+            // The decoder ended because the service stream ended (or failed).
             (&mut feeder.0).await.map_err(|error| anyhow!("Edge stream task failed: {error}"))??;
-            let status = child.wait().await?;
-            let stderr = (&mut errors.0).await.unwrap_or_default();
-            if !status.success() {
-                let detail = String::from_utf8_lossy(&stderr).trim().to_string();
-                Err(anyhow!(if detail.is_empty() { "Microsoft voice decoder failed".to_string() } else { detail }))?;
-            }
             let words = std::mem::take(&mut *pending.lock().unwrap());
             if !words.is_empty() {
                 yield AudioChunk::raw(Vec::new(), SAMPLE_RATE).with_words(words);
@@ -174,32 +152,22 @@ mod tests {
         }
     }
 
-    /// Feed real MP3 produced by ffmpeg through the engine with a fake service.
+    /// Feed a real MP3 through the engine with a fake service.
     #[tokio::test]
-    async fn fake_service_audio_and_words_flow_through_ffmpeg() {
-        let Some(ffmpeg) = crate::which("ffmpeg") else {
-            return;
-        };
-        let output = std::process::Command::new(&ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.5"])
-            .args(["-ar", "24000", "-ac", "1", "-b:a", "48k", "-f", "mp3", "pipe:1"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let mp3 = output.stdout;
+    async fn fake_service_audio_and_words_flow_through_decoder() {
         let engine = EdgeEngine {
             source: Arc::new(move |text, config| {
                 assert_eq!(text, "Hallo Welt");
                 assert!(config.voice.contains("SeraphinaMultilingualNeural"));
-                let mp3 = mp3.clone();
+                let (first, second) = mp3::tests::SINE_MP3.split_at(1000);
                 futures::stream::iter(vec![
                     Ok(EdgeMessage::Boundary { kind: "WordBoundary".into(), offset: 0, duration: 2_000_000, text: "Hallo".into() }),
-                    Ok(EdgeMessage::Audio(mp3)),
+                    Ok(EdgeMessage::Audio(first.to_vec())),
+                    Ok(EdgeMessage::Audio(second.to_vec())),
                     Ok(EdgeMessage::Boundary { kind: "WordBoundary".into(), offset: 2_000_000, duration: 2_000_000, text: "Welt".into() }),
                 ])
                 .boxed()
             }),
-            ffmpeg: None,
         };
         let chunks: Vec<_> = engine.synthesize(" Hallo Welt ".into(), profile()).collect().await;
         let chunks: Vec<_> = chunks.into_iter().map(Result::unwrap).collect();
@@ -212,12 +180,8 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_is_reported() {
-        if crate::which("ffmpeg").is_none() {
-            return;
-        }
         let engine = EdgeEngine {
             source: Arc::new(|_, _| futures::stream::iter(vec![Err(anyhow!("HTTP 403"))]).boxed()),
-            ffmpeg: None,
         };
         let results: Vec<_> = engine.synthesize("Hallo".into(), profile()).collect().await;
         let error = results.into_iter().find_map(Result::err).expect("error");

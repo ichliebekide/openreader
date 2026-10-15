@@ -313,16 +313,15 @@ pub fn split_for_profile(text: &str) -> Vec<String> {
 }
 
 fn edge_status(profile: Option<&VoiceProfile>) -> TtsEngineStatus {
-    let ffmpeg_ok = crate::which("ffmpeg").is_some();
+    // Everything Edge needs is built in; reachability is only known per request.
     let voice = profile.and_then(|profile| profile.edge_voice.clone()).filter(|voice| !voice.is_empty());
-    let detail = match (&voice, ffmpeg_ok) {
-        (_, false) => "ffmpeg is required for streaming playback".to_string(),
-        (None, true) => "Microsoft voice name is missing".to_string(),
-        (Some(voice), true) => format!("{voice} (online)"),
+    let detail = match &voice {
+        None => "Microsoft voice name is missing".to_string(),
+        Some(voice) => format!("{voice} (online)"),
     };
     TtsEngineStatus {
         engine: TtsEngine::Edge,
-        available: ffmpeg_ok,
+        available: true,
         configured: voice.is_some(),
         detail,
     }
