@@ -20,7 +20,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws", "multipart"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
-alsa = "0.9"
+cpal = "0.15"
 futures = "0.3"
 hound = "3.5"
 htmlize = { version = "1", features = ["unescape"] }
