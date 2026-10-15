@@ -1,7 +1,6 @@
 //! Port of `openreader_backend/services/document_service.py`.
 //!
-//! * PDF: poppler `pdftotext` when installed, otherwise the pure-Rust
-//!   `pdf-extract` crate (Python used pypdf).
+//! * PDF: pure Rust (`pdf-extract` on top of `lopdf`); Python used pypdf.
 //! * EPUB: spine order from the OPF package, `nav` documents and
 //!   `linear="no"` items skipped (like ebooklib).
 //! * HTML: text without script/style/nav/head/hidden elements (like BeautifulSoup).
@@ -82,14 +81,12 @@ impl OcrEngine for TesseractCli {
 
 pub struct DocumentService {
     pub ocr: Box<dyn OcrEngine>,
-    pub pdftotext: Option<PathBuf>,
 }
 
 impl Default for DocumentService {
     fn default() -> Self {
         Self {
             ocr: Box::new(TesseractCli::default()),
-            pdftotext: crate::which("pdftotext"),
         }
     }
 }
@@ -111,13 +108,7 @@ impl DocumentService {
     }
 
     fn extract_pdf(&self, path: &Path) -> Result<String> {
-        let raw = match &self.pdftotext {
-            Some(command) => pdftotext(command, path).or_else(|error| {
-                tracing::info!("pdftotext failed ({error}); trying pdf-extract");
-                pdf_extract_text(path)
-            })?,
-            None => pdf_extract_text(path)?,
-        };
+        let raw = pdf_raw_text(path)?;
         let text = normalize_selection(&raw);
         if text.is_empty() {
             bail!("PDF ohne Textschicht: Bitte die gescannten Seiten als Bilder importieren.");
@@ -162,19 +153,7 @@ pub fn decode_text_file(data: &[u8]) -> Result<String> {
     String::from_utf8(body.to_vec()).map_err(|_| invalid())
 }
 
-fn pdftotext(command: &Path, path: &Path) -> Result<String> {
-    let output = run_with_timeout(
-        Command::new(command).args(["-q", "-enc", "UTF-8"]).arg(path).arg("-"),
-        None,
-        Duration::from_secs(120),
-    )?;
-    if !output.status.success() {
-        bail!("pdftotext exit {}", output.status);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-pub fn pdf_extract_text(path: &Path) -> Result<String> {
+pub fn pdf_raw_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)?;
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes));
     match result {
@@ -646,13 +625,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scan.pdf");
         write_pdf(&path, "");
-        for service in [
-            DocumentService { pdftotext: None, ..Default::default() },
-            DocumentService::default(),
-        ] {
-            let error = service.extract_text(&path, "German").unwrap_err();
-            assert!(error.to_string().contains("Textschicht"), "{error}");
-        }
+        let error = DocumentService::default().extract_text(&path, "German").unwrap_err();
+        assert!(error.to_string().contains("Textschicht"), "{error}");
     }
 
     #[test]
@@ -660,12 +634,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("text.pdf");
         write_pdf(&path, "BT /F1 18 Tf 20 50 Td (Hallo PDF Welt.) Tj ET");
-        for service in [
-            DocumentService { pdftotext: None, ..Default::default() },
-            DocumentService::default(),
+        assert_eq!(DocumentService::default().extract_text(&path, "German").unwrap(), "Hallo PDF Welt.");
+    }
+
+    /// LibreOffice PDF (embedded subset fonts with ToUnicode), German text in
+    /// two balanced columns; source: testdata/zweispaltig.fodt.
+    #[test]
+    fn german_two_column_pdf_keeps_umlauts_and_column_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zweispaltig.pdf");
+        std::fs::write(&path, include_bytes!("testdata/zweispaltig.pdf")).unwrap();
+        let text = DocumentService::default().extract_text(&path, "German").unwrap();
+        assert!(text.starts_with("Überschrift: Größere Übungen für Öffentlichkeit Grüße aus Köln!"), "{text}");
+        for phrase in [
+            "Jörg ärgert sich über die Verspätung des Zuges, während Käthe gemütlich Tee trinkt.",
+            "Das Ergebnis lautet 12,50 € pro Quadratmeter.",
+            "Anführungszeichen „so“ und Gedankenstriche – wie diesen.",
+            "Ölkännchen, Ähre, Übel, Fuß, Maß und Spaß",
         ] {
-            assert_eq!(service.extract_text(&path, "German").unwrap(), "Hallo PDF Welt.");
+            assert!(text.contains(phrase), "missing {phrase:?} in {text}");
         }
+        // Column 1 is read completely before column 2.
+        let first_column_end = text.find("Text sicher in die zweite Spalte umbricht.").unwrap();
+        let second_column_start = text.find("Übermäßig lange Sätze").unwrap();
+        assert!(first_column_end < second_column_start);
+        assert!(text.ends_with("damit abgeschlossen."));
+    }
+
+    #[test]
+    fn umlauts_in_simple_font_encoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("umlaut.pdf");
+        // WinAnsiEncoding: \374 = ü, \337 = ß, \366 = ö.
+        write_pdf(&path, "BT /F1 18 Tf 20 50 Td (Gr\\374\\337e aus K\\366ln) Tj ET");
+        assert_eq!(DocumentService::default().extract_text(&path, "German").unwrap(), "Grüße aus Köln");
     }
 
     struct FakeOcr {
@@ -692,7 +694,6 @@ mod tests {
     fn service_with(ocr: FakeOcr) -> DocumentService {
         DocumentService {
             ocr: Box::new(ocr),
-            pdftotext: None,
         }
     }
 
