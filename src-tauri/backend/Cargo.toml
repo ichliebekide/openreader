@@ -27,6 +27,7 @@ htmlize = { version = "1", features = ["unescape"] }
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 libc = "0.2"
+os_pipe = "1"
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "download-binaries", "tls-rustls", "tracing"] }
 pdf-extract = "0.9"
 quick-xml = "0.37"
@@ -47,9 +48,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "11", features = ["chrono-impl", "no-serde-warnings"] }
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+wl-clipboard-rs = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
