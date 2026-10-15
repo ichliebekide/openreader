@@ -2,15 +2,6 @@ node_modules/
 dist/
 /target/
 src-tauri/target/
-backend/.venv/
-backend/.ruff_cache/
-backend/*.egg-info/
-backend/__pycache__/
-backend/**/*.pyc
-.ruff_cache/
-.pytest_cache/
-.coverage
-htmlcov/
 .env
 .env.*
 !.env.example

@@ -25,31 +25,39 @@ src-tauri/target/release/bundle/appimage/
 Runtime:
 
 - `libwebkit2gtk-4.1-0`
-- `ffmpeg`
-- `pipewire-bin` (`pw-cat`, Audioplayer fuer lokale Engines)
-- `libasound2` und das PipeWire-ALSA-Plugin (`pipewire-alsa`) oder das
-  PulseAudio-ALSA-Plugin fuer den getakteten Player (Wortmarkierung)
-- `wl-clipboard`
-- `xdg-desktop-portal`
-- `xdg-desktop-portal-kde`
-- `tesseract-ocr`
+- `libasound2` und `pipewire-alsa` (Audioausgabe ueber das ALSA-Standardgeraet
+  in den PipeWire-Mixer)
+- `xdg-desktop-portal`, `xdg-desktop-portal-kde`
 - `libkf6config-bin` (KWin-Fokusregel lesen und schreiben)
-- `qdbus-qt6` (KWin-Regel laden)
 
 Empfohlen:
 
-- `piper`
-- `tesseract-ocr-deu` fuer deutsche OCR, `tesseract-ocr-eng` fuer englische OCR
-- `poppler-utils` (`pdftotext`) fuer robustere PDF-Extraktion
-- `python3` nur fuer den Legacy-Modus `OPENREADER_BACKEND=python`
+- `tesseract-ocr`, `tesseract-ocr-deu` (OCR-Standard; ohne Tesseract ist nur
+  das reine Rust-OCR `ocrs` ohne Umlaute verfuegbar)
+
+Nicht mehr noetig: `python3`, `ffmpeg`, `pipewire-bin`, `wl-clipboard`,
+`poppler-utils`, `piper`, `qdbus-qt6`, `libportaudio2`.
 
 ## Backend Bundling
 
 Das Backend ist Teil der Rust-Binaerdatei (`openreader-backend`-Crate, im
-App-Prozess gestartet). Es muss kein Python, keine venv und kein separates
-Sidecar gebuendelt werden. Der Python-Quellcode liegt vorerst noch als Tauri
-Resource bei, damit `OPENREADER_BACKEND=python` als Fallback funktioniert; er
-kann mit dem Entfernen des Python-Backends aus `tauri.conf.json` entfallen.
+App-Prozess gestartet). Eingebaut sind:
 
-Die Piper-CLI ist weiterhin ein externes Programm (System-Paket `piper`,
-`$OPENREADER_PIPER` oder `~/.local/share/openreader/piper/piper`).
+- **ONNX Runtime 1.31** (Piper): `ort` mit `download-binaries` laedt beim Build
+  die vorgebaute statische Bibliothek und linkt sie fest ein; zur Laufzeit gibt
+  es keine `libonnxruntime.so`-Abhaengigkeit. Offline-Builds: `ORT_LIB_LOCATION`
+  auf eine lokale ONNX Runtime setzen.
+- **espeak-ng**: wird im Build aus dem von piper-tts 1.4.2 gepinnten Commit
+  gebaut (CMake + C-Compiler; Quelle von GitHub oder `OPENREADER_ESPEAK_SRC`)
+  und statisch gelinkt; die kompilierten de/en-Daten sind eingebettet und
+  werden beim ersten Start nach `~/.cache/openreader/espeak-ng/` entpackt.
+
+Zur Laufzeit geladen (nicht im Paket):
+
+- Piper-Stimmen: `./scripts/setup-tts.sh` bzw. `openreader-backend --download-voices`
+  nach `~/.cache/openreader/voices/piper/`.
+- ocrs-Modelle (nur wenn ocrs gewaehlt): beim ersten Gebrauch nach
+  `~/.cache/openreader/ocrs/`.
+
+Build-Abhaengigkeiten: Rust, Node/npm, `cmake`, C-Compiler, `pkg-config`,
+`libasound2-dev`, `libwebkit2gtk-4.1-dev` (Tauri).

@@ -21,7 +21,7 @@ im Wiedergabezustand; die GUI zeigt den Hinweis unter den Wiedergabeknoepfen.
 Status:
 
 ```bash
-curl http://127.0.0.1:8765/api/tts/status | python3 -m json.tool
+curl -s http://127.0.0.1:8765/api/tts/status
 ```
 
 Test:
@@ -34,13 +34,12 @@ curl -X POST http://127.0.0.1:8765/api/tts/test \
 
 ## Wiedergabesteuerung
 
-Lokale Engines verwenden einen kontrollierbaren `pw-cat`-Prozess pro Vorlesung.
-WAV-Chunks werden in PCM dekodiert (hound). Microsoft Natural verwendet
-im App-Backend einen eigenen, abbrechbaren Ausgabestrom auf dem ALSA-PCM
-`pipewire` (Fallback `pulse`), damit die Audioausgabe eine abfragbare Uhr hat.
-Diese PCMs werden per Name geoeffnet; Hardwaregeraete werden weder geoeffnet
-noch abgefragt. `pipewire-bin` und `pipewire-alsa` werden fuer diese
-Ausgabepfade benoetigt.
+Alle Engines spielen ueber denselben Player: einen abbrechbaren cpal-Ausgabestrom
+auf dem Standardausgabegeraet (unter PipeWire das ALSA-Plugin `pipewire-alsa`,
+also der Desktop-Mixer; Hardwaregeraete werden weder aufgezaehlt noch
+geoeffnet). Er nutzt feste 20-ms-Puffer (gemessene Ausgabeverzoegerung ca.
+12 ms) und liefert eine abfragbare Uhr fuer die Wortmarkierung. Ein anderes
+Geraet waehlt `OPENREADER_AUDIO_DEVICE=<Name>`.
 
 - `POST /api/tts/pause`: Ausgabe anhalten, laufende Anfrage behalten.
 - `POST /api/tts/resume`: dieselbe Anfrage fortsetzen.
@@ -50,12 +49,10 @@ Ausgabepfade benoetigt.
 - WebSocket `/ws/events`: `selection`, `playback` und `tts_fallback`; Wortereignisse ohne wiederholten Volltext.
 
 `speaking=true` bedeutet eine aktive Anfrage, auch waehrend einer Pause.
-Bei lokalen Engines stoppt Pause nur den eigenen Playerprozess (SIGSTOP),
-Fortsetzen nutzt SIGCONT. Der Microsoft-Callbackstream gibt bei Pause Stille aus,
-ohne weitere Sprachsamples aus seiner Queue zu entnehmen.
-Bereits an PipeWire uebergebenes Audio kann noch kurz auslaufen. Die Synthese
-wird durch den angehaltenen Player beziehungsweise dessen begrenzte Queue
-gebremst. Lange Online-Pausen koennen trotzdem vom Dienst beendet werden.
+Bei Pause gibt der Ausgabestrom Stille aus, ohne weitere Sprachsamples aus
+seiner Queue zu entnehmen, und es werden keine neuen Audioabschnitte mehr
+angefordert (Piper rechnet also nicht weiter). Bereits ans Geraet uebergebenes
+Audio (ein Puffer) laeuft noch aus. Stop schliesst den Strom sofort. Lange Online-Pausen koennen trotzdem vom Dienst beendet werden.
 
 Es gibt kein globales Zeichenlimit. EOF wartet
 auf das vollstaendige Ausspielen, auch bei laengerer Pause; explizites Stoppen
@@ -119,16 +116,17 @@ Uhrkorrektur bei HTTP 403) auf Microsoft Edge Read Aloud zu. Es wird kein Window
 JSON2Video-Account benoetigt. Die Engine braucht eine Internetverbindung und ist
 von der Verfuegbarkeit des Microsoft-Dienstes abhaengig.
 
-Audio kommt als MP3-Stream an, wird von `ffmpeg` fortlaufend in 24-kHz-PCM
-dekodiert und im App-Backend ueber den getakteten PipeWire/PulseAudio-Pfad wiedergegeben. Tempo,
+Audio kommt als MP3-Stream an, wird im Prozess von symphonia fortlaufend in
+24-kHz-PCM dekodiert (auf einer echten Antwort samplegenau identisch zur
+frueheren ffmpeg-Dekodierung) und ueber den cpal-Player wiedergegeben. Tempo,
 Lautstaerke, Stoppen und der Schutz vor paralleler Wiedergabe laufen damit ueber
 dieselben zentralen OpenReader-Komponenten wie bei Piper.
 
 Eine Vorleseanfrage behaelt denselben PipeWire-Stream ueber alle Textabschnitte
 offen. Seraphina uebergibt dabei den vollstaendigen Text pro Edge-Anfrage, sodass
 zwischen normalen Abschnitten kein Verbindungs- oder Player-Neustart entsteht.
-Der Player sammelt keine Audio-Chunks vorab: Jeder von `ffmpeg` gelieferte
-PCM-Chunk wird unmittelbar an PipeWire weitergereicht.
+Der Player sammelt keine Audio-Chunks vorab: Jeder dekodierte MP3-Frame geht
+unmittelbar in die begrenzte Ausgabequeue.
 
 ## Piper
 
@@ -138,20 +136,28 @@ Einrichten:
 ./scripts/setup-tts.sh
 ```
 
-Das Script installiert `piper-tts` in `backend/.venv` und lädt die deutsche Stimme.
-Das Rust-Backend sucht die Piper-CLI in dieser Reihenfolge: `$OPENREADER_PIPER`,
-`backend/.venv/bin/piper`, `piper` im `PATH`, `~/.local/share/openreader/piper/piper`.
-Die Abtastrate des Rohaudios kommt aus der Stimmen-Konfiguration (`*.onnx.json`).
+Das Script laedt die deutschen Stimmen (rhasspy/piper-voices v1.0.0) mit
+`openreader-backend --download-voices`. Piper selbst ist eingebaut, eine
+Piper-CLI wird nicht mehr benutzt:
+
+- Phonemisierung mit espeak-ng, statisch gebaut aus genau dem Commit, den
+  piper-tts 1.4.2 verwendet (`212928b`); die kompilierten Sprachdaten (de, en)
+  stecken im Binary und werden beim ersten Gebrauch nach
+  `~/.cache/openreader/espeak-ng/` entpackt. Eigene Daten:
+  `OPENREADER_ESPEAK_DATA` (Verzeichnis, das `espeak-ng-data` enthaelt).
+- Inferenz der `.onnx`-Stimmen mit ONNX Runtime (`ort`); `phoneme_id_map`,
+  `sample_rate`, Inferenzparameter und Sprecher-ID kommen aus der `.onnx.json`.
+- Ein Satz wird gerechnet, waehrend der vorige schon spielt; geladene Stimmen
+  bleiben im Speicher (die zwei zuletzt genutzten).
+- Abgleich mit piper-tts 1.4.2: identische Phonem-IDs auf 1313 deutschen
+  Zeilen, identische Laenge und hoechstens 6 LSB Abweichung pro Sample bei
+  abgeschaltetem Rauschen (drei Stimmen, acht Testsaetze mit Umlauten, Zahlen
+  und Satzzeichen).
 
 ```text
 ~/.cache/openreader/voices/piper/de_DE-thorsten-medium/
 ```
 
-OpenReader nutzt für schnelle Wiedergabe:
-
-- Piper `--output-raw`
-- PipeWire `pw-cat` für rohe PCM-Streams
-- denselben PCM-Player auch fuer dekodierte WAV-Ausgaben anderer Engines
 
 ## Bestehende Einstellungen
 

@@ -1,11 +1,12 @@
-//! Port of `tts/clocked_player.py`: bounded PCM output with a DAC clock for
-//! engines that deliver word timings (Microsoft/Seraphina).
+//! The audio player for all engines (port of `tts/clocked_player.py`, which
+//! replaced the `pw-cat` player as well): bounded PCM output through cpal with
+//! a DAC clock for word progress.
 //!
-//! Python used a PortAudio callback stream (sounddevice) on the `pipewire`
-//! ALSA device or a PulseAudio device. The Rust port writes to the same ALSA
-//! `pipewire` (or `pulse`) PCM by name; never an exclusive hardware device.
-//! At most 12 blocks of 20 ms are queued; only consumed PCM advances media
-//! time, so silence during pause or starvation does not move the highlight.
+//! At most 12 blocks of 20 ms are queued; synthesis is back-pressured by that
+//! queue. Pause outputs silence without consuming queued speech and stops
+//! pulling new chunks; only consumed PCM advances media time, so silence
+//! during pause or starvation does not move the highlight. Stop drops the
+//! stream immediately.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -201,7 +202,7 @@ pub struct ClockedAudioPlayer {
 
 impl ClockedAudioPlayer {
     pub fn new(on_progress: ProgressCallback) -> Self {
-        Self::with_factory(on_progress, Arc::new(AlsaFactory))
+        Self::with_factory(on_progress, Arc::new(CpalFactory))
     }
 
     pub fn with_factory(on_progress: ProgressCallback, factory: Arc<dyn PcmOutputFactory>) -> Self {
@@ -251,7 +252,14 @@ async fn produce(
         Ok(())
     };
 
-    while let Some(chunk) = chunks.next().await {
+    loop {
+        // While paused, do not pull (and thereby synthesize) further audio.
+        while paused.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let Some(chunk) = chunks.next().await else {
+            break;
+        };
         let mut chunk = chunk?;
         words.lock().unwrap().extend(chunk.words.drain(..));
         if chunk.data.is_empty() {
@@ -402,140 +410,143 @@ impl Drop for CloseOutput {
     }
 }
 
-// ------------------------------------------------------------------- ALSA
+// ------------------------------------------------------------------- cpal
 
-/// Plays through the ALSA `pipewire` PCM (pipewire-alsa), falling back to
-/// `pulse`. Only these mixer PCMs are opened, by name; hardware devices are
-/// never opened or probed (Python: "never open an exclusive ALSA hardware
-/// device behind the desktop mixer").
-pub struct AlsaFactory;
+/// Audio output through cpal on the default output device. On a PipeWire
+/// desktop that is the PipeWire ALSA plugin (`pipewire-alsa`), i.e. the
+/// desktop mixer; hardware devices are not enumerated or opened.
+/// `OPENREADER_AUDIO_DEVICE=<name>` selects another cpal output device.
+pub struct CpalFactory;
 
-pub const MIXER_PCMS: [&str; 2] = ["pipewire", "pulse"];
-
-enum AlsaCommand {
+enum StreamCommand {
     Start,
 }
 
-struct AlsaOutput {
-    commands: Option<std::sync::mpsc::Sender<AlsaCommand>>,
-    abort: Arc<AtomicBool>,
-    started: bool,
+struct CpalOutput {
+    commands: Option<std::sync::mpsc::Sender<StreamCommand>>,
+    started_ok: std::sync::mpsc::Receiver<Result<(), String>>,
     base: Instant,
     shared: Arc<OutputShared>,
+    started: bool,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-fn open_mixer_pcm(sample_rate: u32, channels: u16, block_frames: usize) -> Result<alsa::PCM> {
-    use alsa::pcm::{Access, Format, HwParams};
-    use alsa::{Direction, ValueOr};
-
-    let mut last_error = None;
-    for name in MIXER_PCMS {
-        let attempt = (|| -> Result<alsa::PCM> {
-            let pcm = alsa::PCM::new(name, Direction::Playback, false)?;
-            {
-                let hw = HwParams::any(&pcm)?;
-                hw.set_channels(channels as u32)?;
-                hw.set_rate(sample_rate, ValueOr::Nearest)?;
-                hw.set_format(Format::s16())?;
-                hw.set_access(Access::RWInterleaved)?;
-                hw.set_period_size_near(block_frames as alsa::pcm::Frames, ValueOr::Nearest)?;
-                hw.set_buffer_size_near((block_frames * 4) as alsa::pcm::Frames)?;
-                pcm.hw_params(&hw)?;
-                let rate = hw.get_rate()?;
-                if rate != sample_rate {
-                    bail!("{name}: sample rate {sample_rate} not supported (got {rate})");
-                }
+fn output_device(host: &cpal::Host) -> Result<cpal::Device> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    if let Ok(wanted) = std::env::var("OPENREADER_AUDIO_DEVICE") {
+        let devices = host.output_devices()?;
+        for device in devices {
+            if device.name().is_ok_and(|name| name == wanted) {
+                return Ok(device);
             }
-            {
-                let sw = pcm.sw_params_current()?;
-                sw.set_start_threshold(block_frames as alsa::pcm::Frames)?;
-                pcm.sw_params(&sw)?;
-            }
-            Ok(pcm)
-        })();
-        match attempt {
-            Ok(pcm) => return Ok(pcm),
-            Err(error) => last_error = Some(error),
         }
+        bail!("Audioausgabe {wanted} nicht gefunden");
     }
-    tracing::info!("no mixer PCM for timed playback: {last_error:?}");
-    bail!("Wortmarkierung benoetigt eine PipeWire- oder PulseAudio-Ausgabe.")
+    host.default_output_device()
+        .ok_or_else(|| anyhow!("Keine Audioausgabe gefunden (PipeWire/PulseAudio laeuft?)"))
 }
 
-impl PcmOutputFactory for AlsaFactory {
+impl PcmOutputFactory for CpalFactory {
     fn open(&self, sample_rate: u32, channels: u16, block_frames: usize, shared: Arc<OutputShared>) -> Result<Box<dyn PcmOutput>> {
+        use cpal::traits::{DeviceTrait, StreamTrait};
+
         let base = Instant::now();
-        let abort = Arc::new(AtomicBool::new(false));
-        let (command_tx, command_rx) = std::sync::mpsc::channel::<AlsaCommand>();
+        let (command_tx, command_rx) = std::sync::mpsc::channel::<StreamCommand>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-        let thread_shared = shared.clone();
-        let thread_abort = abort.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let callback_shared = shared.clone();
+        let error_shared = shared.clone();
+        // cpal streams are not `Send`; each stream lives on its own thread.
         let thread = std::thread::Builder::new()
             .name("openreader-audio".into())
             .spawn(move || {
-                let pcm = match open_mixer_pcm(sample_rate, channels, block_frames) {
-                    Ok(pcm) => pcm,
+                let build = || -> Result<cpal::Stream> {
+                    let host = cpal::default_host();
+                    let device = output_device(&host)?;
+                    let mut logged = false;
+                    let data_callback = move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                        // DAC time of this buffer's first frame on our monotonic clock.
+                        let timestamp = info.timestamp();
+                        let delay = timestamp
+                            .playback
+                            .duration_since(&timestamp.callback)
+                            .unwrap_or_default();
+                        if !logged {
+                            logged = true;
+                            tracing::debug!(
+                                "audio output: {} frames per callback, output delay {:?}",
+                                data.len() / channels.max(1) as usize,
+                                delay
+                            );
+                        }
+                        callback_shared.fill(data, base.elapsed().as_secs_f64() + delay.as_secs_f64());
+                    };
+                    let error_callback = move |error: cpal::StreamError| error_shared.set_error(error.to_string());
+                    // Small fixed buffers keep pause/stop and the highlight responsive.
+                    let fixed = cpal::StreamConfig {
+                        channels,
+                        sample_rate: cpal::SampleRate(sample_rate),
+                        buffer_size: cpal::BufferSize::Fixed(block_frames as u32),
+                    };
+                    match device.build_output_stream(&fixed, data_callback.clone(), error_callback.clone(), None) {
+                        Ok(stream) => Ok(stream),
+                        Err(error) => {
+                            tracing::debug!("fixed audio buffer rejected ({error}); using the device default");
+                            let config = cpal::StreamConfig {
+                                buffer_size: cpal::BufferSize::Default,
+                                ..fixed
+                            };
+                            Ok(device.build_output_stream(&config, data_callback, error_callback, None)?)
+                        }
+                    }
+                };
+                let stream = match build() {
+                    Ok(stream) => {
+                        let _ = ready_tx.send(Ok(()));
+                        stream
+                    }
                     Err(error) => {
                         let _ = ready_tx.send(Err(error.to_string()));
                         return;
                     }
                 };
-                let io = match pcm.io_i16() {
-                    Ok(io) => io,
-                    Err(error) => {
-                        let _ = ready_tx.send(Err(error.to_string()));
-                        return;
-                    }
-                };
-                let _ = ready_tx.send(Ok(()));
-                if !matches!(command_rx.recv(), Ok(AlsaCommand::Start)) {
-                    let _ = pcm.drop();
-                    return;
-                }
-                let mut buffer = vec![0i16; block_frames * channels as usize];
-                while !thread_abort.load(Ordering::SeqCst) {
-                    // Frames already queued in front of this block -> its DAC time.
-                    let delay = pcm.delay().unwrap_or(0).max(0) as f64 / sample_rate as f64;
-                    thread_shared.fill(&mut buffer, base.elapsed().as_secs_f64() + delay);
-                    let mut offset = 0;
-                    while offset < buffer.len() && !thread_abort.load(Ordering::SeqCst) {
-                        match io.writei(&buffer[offset..]) {
-                            Ok(frames) => offset += frames * channels as usize,
-                            Err(error) => {
-                                if let Err(error) = pcm.try_recover(error, true) {
-                                    thread_shared.set_error(format!("Audioausgabe fehlgeschlagen: {error}"));
-                                    let _ = pcm.drop();
-                                    return;
-                                }
-                            }
+                while let Ok(command) = command_rx.recv() {
+                    match command {
+                        StreamCommand::Start => {
+                            let _ = started_tx.send(stream.play().map_err(|error| error.to_string()));
                         }
                     }
                 }
-                let _ = pcm.drop();
+                // Sender dropped: stop and close the stream.
+                let _ = stream.pause();
+                drop(stream);
             })?;
         ready_rx
             .recv()
             .map_err(|_| anyhow!("audio thread exited"))?
             .map_err(|error| anyhow!(error))?;
-        Ok(Box::new(AlsaOutput {
+        Ok(Box::new(CpalOutput {
             commands: Some(command_tx),
-            abort,
-            started: false,
+            started_ok: started_rx,
             base,
             shared,
+            started: false,
             thread: Some(thread),
         }))
     }
 }
 
-impl PcmOutput for AlsaOutput {
+impl PcmOutput for CpalOutput {
     fn start(&mut self) -> Result<()> {
         self.commands
             .as_ref()
             .ok_or_else(|| anyhow!("audio output closed"))?
-            .send(AlsaCommand::Start)
+            .send(StreamCommand::Start)
             .map_err(|_| anyhow!("audio thread exited"))?;
+        self.started_ok
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow!("audio output did not start"))?
+            .map_err(|error| anyhow!(error))?;
         self.started = true;
         Ok(())
     }
@@ -549,12 +560,10 @@ impl PcmOutput for AlsaOutput {
     }
 }
 
-impl Drop for AlsaOutput {
+impl Drop for CpalOutput {
     fn drop(&mut self) {
-        self.abort.store(true, Ordering::SeqCst);
         self.commands.take();
         if let Some(thread) = self.thread.take() {
-            // The writer blocks at most about one period (20 ms).
             let _ = thread.join();
         }
     }
@@ -701,6 +710,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pause_before_first_chunk_blocks_synthesis_and_is_cancellable() {
+        let device = Arc::new(FakeDevice::default());
+        let player = Arc::new(ClockedAudioPlayer::with_factory(Arc::new(|_| {}), Arc::new(FakeFactory(device))));
+        let produced = Arc::new(AtomicBool::new(false));
+        let flag = produced.clone();
+        let chunks = futures::stream::once(async move {
+            flag.store(true, Ordering::SeqCst);
+            Ok(AudioChunk::raw(vec![0, 0], 24000))
+        })
+        .boxed();
+        player.pause().await;
+        let task = tokio::spawn({
+            let player = player.clone();
+            async move { player.play_stream(chunks).await }
+        });
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(!produced.load(Ordering::SeqCst));
+        task.abort();
+        let _ = task.await;
+        assert!(!player.paused());
+    }
+
+    #[tokio::test]
+    async fn engine_failure_after_audio_closes_output_and_generator() {
+        let device = Arc::new(FakeDevice::default());
+        let player = ClockedAudioPlayer::with_factory(Arc::new(|_| {}), Arc::new(FakeFactory(device.clone())));
+        let closed = Arc::new(AtomicBool::new(false));
+        let flag = closed.clone();
+        let chunks: ChunkStream = Box::pin(async_stream::try_stream! {
+            struct SetOnDrop(Arc<AtomicBool>);
+            impl Drop for SetOnDrop {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let _guard = SetOnDrop(flag);
+            yield AudioChunk::raw(vec![1u8; 960 * 4], 24000);
+            Err(anyhow!("network lost"))?;
+        });
+        let error = player.play_stream(chunks).await.unwrap_err();
+        assert_eq!(error.to_string(), "network lost");
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(device.closed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn format_change_is_an_error() {
+        let device = Arc::new(FakeDevice::default());
+        let player = ClockedAudioPlayer::with_factory(Arc::new(|_| {}), Arc::new(FakeFactory(device)));
+        let chunks = futures::stream::iter(vec![
+            Ok(AudioChunk::raw(vec![0; 4000], 24000)),
+            Ok(AudioChunk::raw(vec![0; 4000], 22050)),
+        ])
+        .boxed();
+        let error = player.play_stream(chunks).await.unwrap_err();
+        assert!(error.to_string().contains("format changed"));
+    }
+
+    #[tokio::test]
     async fn clocked_player_completes_after_drain() {
         let device = Arc::new(FakeDevice::default());
         let changes: Arc<Mutex<Vec<Option<WordBoundary>>>> = Arc::default();
@@ -735,6 +803,7 @@ mod tests {
         if std::env::var("OPENREADER_TEST_PIPEWIRE").as_deref() != Ok("1") {
             return;
         }
+        let _ = tracing_subscriber::fmt().with_env_filter("openreader_backend=debug").try_init();
         let changes: Arc<Mutex<Vec<Option<WordBoundary>>>> = Arc::default();
         let recorder = changes.clone();
         let player = Arc::new(ClockedAudioPlayer::new(Arc::new(move |word| recorder.lock().unwrap().push(word))));

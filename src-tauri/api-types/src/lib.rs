@@ -275,6 +275,35 @@ pub struct ReaderSettings {
     pub excluded_window_classes: Vec<String>,
     #[serde(default = "default_voice_profiles")]
     pub voice_profiles: Vec<VoiceProfile>,
+    /// OCR engine for image imports (`OPENREADER_OCR` overrides it).
+    #[serde(default)]
+    pub ocr_engine: OcrEngineKind,
+}
+
+/// `tesseract` (default; external CLI, all installed languages incl. German)
+/// or `ocrs` (pure Rust, Latin letters without umlauts; models are
+/// downloaded on first use).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OcrEngineKind {
+    #[default]
+    Tesseract,
+    Ocrs,
+}
+
+impl OcrEngineKind {
+    pub const ALL: [OcrEngineKind; 2] = [OcrEngineKind::Tesseract, OcrEngineKind::Ocrs];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OcrEngineKind::Tesseract => "tesseract",
+            OcrEngineKind::Ocrs => "ocrs",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|engine| engine.as_str() == value)
+    }
 }
 
 fn yes() -> bool {
@@ -304,6 +333,7 @@ impl Default for ReaderSettings {
             ignore_terminal_windows: true,
             excluded_window_classes: default_excluded_window_classes(),
             voice_profiles: default_voice_profiles(),
+            ocr_engine: OcrEngineKind::Tesseract,
         }
     }
 }
@@ -605,6 +635,9 @@ mod tests {
         assert_eq!(serde_json::from_str::<ReaderSettings>(&json).unwrap(), settings);
         assert!(json.contains("\"min_selection_chars\": 3"));
         assert!(json.contains("\"length_scale\": 1.0"));
+        assert!(json.contains("\"ocr_engine\": \"tesseract\""));
+        let ocrs: ReaderSettings = serde_json::from_str(r#"{"ocr_engine":"ocrs"}"#).unwrap();
+        assert_eq!(ocrs.ocr_engine, OcrEngineKind::Ocrs);
     }
 
     #[test]

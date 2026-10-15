@@ -18,7 +18,6 @@ OpenReader/
   src/                         Tauri/Vite/React UI
   src-tauri/                   Rust Desktop Shell, Tray, Overlay Window
   src-tauri/backend/           Rust-Backend (API, TTS, Selection, Dokumente)
-  backend/openreader_backend/  Legacy-Python-Backend (Fallback, wird entfernt)
   integrations/kwin/           KDE/KWin Context Bridge
   docs/                        Architektur, Wayland, Packaging, Roadmap
   scripts/                     Dev, Packaging und Diagnose
@@ -30,14 +29,13 @@ OpenReader/
 OpenReader ist absichtlich zweigeteilt:
 
 - Frontend: Tauri-App mit Hauptfenster, transparentem Overlay und Tray.
-- Backend: lokaler HTTP/WebSocket-Dienst auf `127.0.0.1:8765`, in Rust,
-  standardmaessig im Tauri-Prozess (`OPENREADER_BACKEND=python` startet das
-  alte Python-Backend). Siehe [docs/RUST_BACKEND.md](docs/RUST_BACKEND.md).
+- Backend: lokaler HTTP/WebSocket-Dienst auf `127.0.0.1:8765`, in Rust, im
+  Tauri-Prozess. Siehe [docs/RUST_BACKEND.md](docs/RUST_BACKEND.md).
 
 Der Backend-Dienst beobachtet unter aktuellem KDE/KWin die PRIMARY Selection
-ereignisgesteuert ueber `ext-data-control-v1`. Die Tauri-Binaerdatei besitzt
-dafuer einen kleinen Rust-Modus `--selection-helper`, dessen Textframes das
-Backend liest. Es laufen weder `wl-paste --watch` noch Selection-Polling.
+ereignisgesteuert ueber `ext-data-control-v1` (wlroots: `wlr-data-control`).
+Die Tauri-Binaerdatei besitzt dafuer einen kleinen Rust-Modus
+`--selection-helper` (wl-clipboard-rs), dessen Textframes das Backend liest. Es laufen weder `wl-paste --watch` noch Selection-Polling.
 Auf aelteren KDE-Versionen bleibt Klipper D-Bus der Fallback. Kurze Aenderungen
 werden debounced und unerwuenschte Kontexte gefiltert. Wenn genug Text erkannt
 wurde, sendet das Backend ein Selection-Event per WebSocket an die Tauri-App.
@@ -53,18 +51,12 @@ sudo apt update
 sudo apt install -y \
   build-essential curl file libwebkit2gtk-4.1-dev librsvg2-dev \
   libayatana-appindicator3-dev libsoup-3.0-dev javascriptcoregtk-4.1 \
-  wl-clipboard xdg-desktop-portal xdg-desktop-portal-kde \
-  tesseract-ocr poppler-utils ffmpeg libasound2-dev \
-  pipewire-bin pipewire-alsa
+  cmake pkg-config libasound2-dev \
+  xdg-desktop-portal xdg-desktop-portal-kde pipewire-alsa \
+  tesseract-ocr tesseract-ocr-deu
 ```
 
-Optional:
-
-```bash
-sudo apt install -y piper
-```
-
-Piper einrichten:
+Piper-Stimmen laden (Piper selbst ist eingebaut):
 
 ```bash
 ./scripts/setup-tts.sh
@@ -78,9 +70,9 @@ Piper einrichten:
 ./scripts/dev.sh
 ```
 
-`scripts/dev.sh` startet Tauri mit dem Rust-Backend im App-Prozess. Mit
-`OPENREADER_BACKEND=python ./scripts/dev.sh` wird stattdessen wie frueher eine
-Python-venv eingerichtet und das Python-Backend gestartet.
+`scripts/dev.sh` startet Tauri mit dem Rust-Backend im App-Prozess. Python
+wird nicht benoetigt. Der erste Build laedt ONNX Runtime und den
+espeak-ng-Quellcode (siehe [docs/PACKAGING.md](docs/PACKAGING.md)).
 
 Backend allein (ohne UI) und Tests:
 
@@ -115,14 +107,15 @@ Microsoft Seraphina (online):
 
 - `de-DE-SeraphinaMultilingualNeural`
 - Engine: `src-tauri/backend/src/tts/edge/` (nativer Port von edge-tts 7.3.1)
-- streamt ueber Websocket, `ffmpeg` und PipeWire; kein Windows/SAPI noetig
+- streamt ueber Websocket, dekodiert MP3 im Prozess (symphonia) und spielt
+  ueber cpal/PipeWire; kein Windows/SAPI noetig
 - benoetigt eine Internetverbindung, aber keinen JSON2Video-Account
 
 Piper (offline):
 
-- Piper CLI mit `--output-raw`
-- Engine: `src-tauri/backend/src/tts/piper.rs`
-- Setup: `./scripts/setup-tts.sh`
+- eingebaut: espeak-ng-Phonemisierung + ONNX Runtime, keine Piper-CLI
+- Engine: `src-tauri/backend/src/tts/piper/`
+- Stimmen laden: `./scripts/setup-tts.sh`
 
 Neue Installationen starten mit Piper. Eine Online-Stimme wird niemals automatisch
 als Ersatz fuer eine lokale Stimme verwendet. Fehler werden angezeigt, nicht

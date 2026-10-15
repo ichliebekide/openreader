@@ -1,15 +1,17 @@
-//! Native Rust port of the OpenReader Python backend.
+//! The OpenReader backend in Rust (originally ported from a Python/FastAPI
+//! service, which has been removed).
 //!
-//! The crate serves the same REST/WebSocket API as `backend/openreader_backend`
-//! (FastAPI) so the UI keeps working unchanged. It can run inside the
-//! Tauri process ([`server::spawn_background`]) or standalone through the
+//! It serves the REST/WebSocket API used by the UI, runs inside the Tauri
+//! process ([`server::spawn_background`]) or standalone through the
 //! `openreader-backend` binary.
 
 pub mod clipboard_monitor;
 pub mod desktop_context;
 pub mod documents;
+pub mod download;
 pub mod events;
 pub mod models;
+pub mod ocrs_engine;
 pub mod pronunciation;
 pub mod safety;
 #[cfg(target_os = "linux")]

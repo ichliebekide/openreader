@@ -1,7 +1,6 @@
 //! Port of `openreader_backend/services/document_service.py`.
 //!
-//! * PDF: poppler `pdftotext` when installed, otherwise the pure-Rust
-//!   `pdf-extract` crate (Python used pypdf).
+//! * PDF: pure Rust (`pdf-extract` on top of `lopdf`); Python used pypdf.
 //! * EPUB: spine order from the OPF package, `nav` documents and
 //!   `linear="no"` items skipped (like ebooklib).
 //! * HTML: text without script/style/nav/head/hidden elements (like BeautifulSoup).
@@ -18,6 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use image::{DynamicImage, GrayImage, ImageDecoder, ImageReader, Luma};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::models::OcrEngineKind;
 use crate::text::normalize_selection;
 
 const MAX_OCR_PIXELS: u64 = 40_000_000;
@@ -81,16 +81,34 @@ impl OcrEngine for TesseractCli {
 }
 
 pub struct DocumentService {
+    /// Tesseract (or a fake in tests).
     pub ocr: Box<dyn OcrEngine>,
-    pub pdftotext: Option<PathBuf>,
+    /// Pure-Rust alternative (ocrs).
+    pub ocrs: Box<dyn ImageOcr>,
+    pub engine: std::sync::RwLock<OcrEngineKind>,
 }
 
 impl Default for DocumentService {
     fn default() -> Self {
         Self {
             ocr: Box::new(TesseractCli::default()),
-            pdftotext: crate::which("pdftotext"),
+            ocrs: Box::new(crate::ocrs_engine::OcrsEngine::default()),
+            engine: std::sync::RwLock::new(effective_ocr_engine(OcrEngineKind::Tesseract)),
         }
+    }
+}
+
+/// An OCR engine that works on the prepared image without language data.
+pub trait ImageOcr: Send + Sync {
+    fn recognize(&self, image: &GrayImage) -> Result<String>;
+}
+
+/// `OPENREADER_OCR=ocrs|tesseract` overrides the setting.
+pub fn effective_ocr_engine(setting: OcrEngineKind) -> OcrEngineKind {
+    match std::env::var("OPENREADER_OCR").unwrap_or_default().to_lowercase().as_str() {
+        "ocrs" => OcrEngineKind::Ocrs,
+        "tesseract" => OcrEngineKind::Tesseract,
+        _ => setting,
     }
 }
 
@@ -111,13 +129,7 @@ impl DocumentService {
     }
 
     fn extract_pdf(&self, path: &Path) -> Result<String> {
-        let raw = match &self.pdftotext {
-            Some(command) => pdftotext(command, path).or_else(|error| {
-                tracing::info!("pdftotext failed ({error}); trying pdf-extract");
-                pdf_extract_text(path)
-            })?,
-            None => pdf_extract_text(path)?,
-        };
+        let raw = pdf_raw_text(path)?;
         let text = normalize_selection(&raw);
         if text.is_empty() {
             bail!("PDF ohne Textschicht: Bitte die gescannten Seiten als Bilder importieren.");
@@ -125,7 +137,16 @@ impl DocumentService {
         Ok(text)
     }
 
+    pub fn set_engine(&self, engine: OcrEngineKind) {
+        *self.engine.write().unwrap() = effective_ocr_engine(engine);
+    }
+
     fn extract_ocr(&self, path: &Path, language: &str) -> Result<String> {
+        if *self.engine.read().unwrap() == OcrEngineKind::Ocrs {
+            let prepared = prepare_ocr_image(path)?;
+            let text = self.ocrs.recognize(&prepared)?;
+            return Ok(normalize_selection(&text.nfc().collect::<String>()));
+        }
         let code = ocr_language(language)?;
         let languages = self.ocr.list_languages()?;
         let installed: Vec<&str> = languages.lines().skip(1).map(str::trim).collect();
@@ -162,19 +183,7 @@ pub fn decode_text_file(data: &[u8]) -> Result<String> {
     String::from_utf8(body.to_vec()).map_err(|_| invalid())
 }
 
-fn pdftotext(command: &Path, path: &Path) -> Result<String> {
-    let output = run_with_timeout(
-        Command::new(command).args(["-q", "-enc", "UTF-8"]).arg(path).arg("-"),
-        None,
-        Duration::from_secs(120),
-    )?;
-    if !output.status.success() {
-        bail!("pdftotext exit {}", output.status);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-pub fn pdf_extract_text(path: &Path) -> Result<String> {
+pub fn pdf_raw_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)?;
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes));
     match result {
@@ -646,13 +655,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("scan.pdf");
         write_pdf(&path, "");
-        for service in [
-            DocumentService { pdftotext: None, ..Default::default() },
-            DocumentService::default(),
-        ] {
-            let error = service.extract_text(&path, "German").unwrap_err();
-            assert!(error.to_string().contains("Textschicht"), "{error}");
-        }
+        let error = DocumentService::default().extract_text(&path, "German").unwrap_err();
+        assert!(error.to_string().contains("Textschicht"), "{error}");
     }
 
     #[test]
@@ -660,12 +664,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("text.pdf");
         write_pdf(&path, "BT /F1 18 Tf 20 50 Td (Hallo PDF Welt.) Tj ET");
-        for service in [
-            DocumentService { pdftotext: None, ..Default::default() },
-            DocumentService::default(),
+        assert_eq!(DocumentService::default().extract_text(&path, "German").unwrap(), "Hallo PDF Welt.");
+    }
+
+    /// LibreOffice PDF (embedded subset fonts with ToUnicode), German text in
+    /// two balanced columns; source: testdata/zweispaltig.fodt.
+    #[test]
+    fn german_two_column_pdf_keeps_umlauts_and_column_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zweispaltig.pdf");
+        std::fs::write(&path, include_bytes!("testdata/zweispaltig.pdf")).unwrap();
+        let text = DocumentService::default().extract_text(&path, "German").unwrap();
+        assert!(text.starts_with("Überschrift: Größere Übungen für Öffentlichkeit Grüße aus Köln!"), "{text}");
+        for phrase in [
+            "Jörg ärgert sich über die Verspätung des Zuges, während Käthe gemütlich Tee trinkt.",
+            "Das Ergebnis lautet 12,50 € pro Quadratmeter.",
+            "Anführungszeichen „so“ und Gedankenstriche – wie diesen.",
+            "Ölkännchen, Ähre, Übel, Fuß, Maß und Spaß",
         ] {
-            assert_eq!(service.extract_text(&path, "German").unwrap(), "Hallo PDF Welt.");
+            assert!(text.contains(phrase), "missing {phrase:?} in {text}");
         }
+        // Column 1 is read completely before column 2.
+        let first_column_end = text.find("Text sicher in die zweite Spalte umbricht.").unwrap();
+        let second_column_start = text.find("Übermäßig lange Sätze").unwrap();
+        assert!(first_column_end < second_column_start);
+        assert!(text.ends_with("damit abgeschlossen."));
+    }
+
+    #[test]
+    fn umlauts_in_simple_font_encoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("umlaut.pdf");
+        // WinAnsiEncoding: \374 = ü, \337 = ß, \366 = ö.
+        write_pdf(&path, "BT /F1 18 Tf 20 50 Td (Gr\\374\\337e aus K\\366ln) Tj ET");
+        assert_eq!(DocumentService::default().extract_text(&path, "German").unwrap(), "Grüße aus Köln");
     }
 
     struct FakeOcr {
@@ -692,7 +724,7 @@ mod tests {
     fn service_with(ocr: FakeOcr) -> DocumentService {
         DocumentService {
             ocr: Box::new(ocr),
-            pdftotext: None,
+            ..Default::default()
         }
     }
 
@@ -736,6 +768,60 @@ mod tests {
         });
         let error = service.extract_text(&path, "English").unwrap_err();
         assert!(error.to_string().contains("timeout"));
+    }
+
+    struct FakeImageOcr;
+
+    impl ImageOcr for FakeImageOcr {
+        fn recognize(&self, image: &GrayImage) -> Result<String> {
+            assert_eq!(image.dimensions(), (200, 100));
+            Ok("Pure Rust OCR".into())
+        }
+    }
+
+    #[test]
+    fn ocrs_engine_can_be_selected_and_needs_no_language_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capture.png");
+        image::RgbImage::from_pixel(100, 50, image::Rgb([255, 255, 255])).save(&path).unwrap();
+        let service = DocumentService {
+            ocr: Box::new(FakeOcr {
+                languages: "List of languages (0):\n",
+                calls: Mutex::new(Vec::new()),
+                result: Ok("tesseract"),
+            }),
+            ocrs: Box::new(FakeImageOcr),
+            engine: std::sync::RwLock::new(OcrEngineKind::Tesseract),
+        };
+        assert!(service.extract_text(&path, "German").unwrap_err().to_string().contains("tesseract-ocr-deu"));
+        if std::env::var_os("OPENREADER_OCR").is_none() {
+            service.set_engine(OcrEngineKind::Ocrs);
+            assert_eq!(service.extract_text(&path, "German").unwrap(), "Pure Rust OCR");
+        }
+    }
+
+    /// Opt-in: downloads the ocrs models (~12 MB) on first run.
+    #[test]
+    fn real_ocrs_reads_prepared_image() {
+        if std::env::var("OPENREADER_TEST_OCRS").as_deref() != Ok("1") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("text.png");
+        let status = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=white:s=1400x160"])
+            .args(["-frames:v", "1", "-vf"])
+            .arg("drawtext=text='OpenReader reads selected text.':fontcolor=black:fontsize=40:x=30:y=60")
+            .arg(&path)
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
+        let service = DocumentService::default();
+        service.set_engine(OcrEngineKind::Ocrs);
+        let started = std::time::Instant::now();
+        let text = service.extract_text(&path, "English").unwrap();
+        eprintln!("ocrs: {text:?} in {:?}", started.elapsed());
+        assert_eq!(text, "OpenReader reads selected text.");
     }
 
     #[test]

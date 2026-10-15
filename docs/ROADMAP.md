@@ -7,7 +7,7 @@
 - FastAPI Backend
 - PRIMARY Selection Monitoring via nativem `ext-data-control-v1`-Helper auf KDE
 - Klipper D-Bus als Fallback fuer aelteres KWin
-- `wl-clipboard` Data-Control-Adapter fuer wlroots-Compositoren
+- ~~`wl-clipboard` Data-Control-Adapter fuer wlroots-Compositoren~~ (erledigt: wl-clipboard-rs im Selection-Helper)
 - KWin Context Bridge für Cursorposition und Terminal-Ausschluss
 - `/api/speak` mit satzweiser TTS-Ausgabe
 - Microsoft Seraphina mit Streaming und Wortmarkierung

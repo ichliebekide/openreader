@@ -1,9 +1,10 @@
 //! Port of `openreader_backend/services/clipboard_monitor.py`.
 //!
-//! KDE: native `ext-data-control-v1` helper (`<exe> --selection-helper`, NUL
-//! framed text on stdout), falling back to Klipper over D-Bus. Other Wayland
-//! desktops: `wl-paste --primary --watch`. Candidates are debounced and then
-//! passed to a [`SelectionSink`] (normally guard + event hub).
+//! All Wayland desktops: the native selection helper (`<exe> --selection-helper`,
+//! wl-clipboard-rs with ext-/wlr-data-control, NUL framed text on stdout).
+//! On KDE without data-control support (older KWin) Klipper over D-Bus is the
+//! fallback. Candidates are debounced and then passed to a [`SelectionSink`]
+//! (normally guard + event hub).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -122,15 +123,11 @@ impl ClipboardMonitor {
     }
 
     pub async fn run(&self) {
-        if is_kde_session() {
-            self.run_with_retry(|| self.watch_kde_selection()).await;
+        if self.inner.helper.is_none() && !is_kde_session() {
+            tracing::info!("no selection source: no selection helper configured");
             return;
         }
-        if crate::which("wl-paste").is_none() {
-            tracing::info!("no selection source: not KDE and wl-paste is missing");
-            return;
-        }
-        self.run_with_retry(|| self.watch_wl_paste()).await;
+        self.run_with_retry(|| self.watch_selection()).await;
     }
 
     async fn run_with_retry<F, Fut>(&self, watch: F)
@@ -151,7 +148,7 @@ impl ClipboardMonitor {
         self.cancel_pending();
     }
 
-    async fn watch_kde_selection(&self) -> bool {
+    async fn watch_selection(&self) -> bool {
         if let Some(helper) = self.inner.helper.clone() {
             let watched = self
                 .watch_frames(Command::new(helper).arg("--selection-helper"))
@@ -160,15 +157,10 @@ impl ClipboardMonitor {
                 return watched;
             }
         }
-        self.watch_klipper().await
-    }
-
-    async fn watch_wl_paste(&self) -> bool {
-        let mut command = Command::new("wl-paste");
-        // wl-paste --watch sends the current selection to this command on stdin.
-        // Reading stdin avoids a second Wayland selection request while dragging.
-        command.args(["--primary", "--type", "text", "--watch", "sh", "-c", "cat; printf '\\000'"]);
-        self.watch_frames(&mut command).await
+        if is_kde_session() {
+            return self.watch_klipper().await;
+        }
+        false
     }
 
     /// Read NUL-terminated frames from a child; `false` when the child ends or misbehaves.

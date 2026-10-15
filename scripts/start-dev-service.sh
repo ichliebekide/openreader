@@ -6,12 +6,6 @@ UNIT="openreader-dev.service"
 CARGO_BIN="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
 RUNTIME_PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-BACKEND="${OPENREADER_BACKEND:-rust}"
-if [ "$BACKEND" = "python" ] && [ ! -x "$ROOT_DIR/backend/.venv/bin/python" ]; then
-  echo "Backend-Venv fehlt. Fuehre zuerst OPENREADER_BACKEND=python ./scripts/dev.sh aus." >&2
-  exit 1
-fi
-
 if systemctl --user cat "$UNIT" >/dev/null 2>&1; then
   systemctl --user restart "$UNIT"
 else
@@ -21,8 +15,6 @@ else
     --property=KillMode=mixed \
     --working-directory="$ROOT_DIR" \
     --setenv="PATH=$RUNTIME_PATH" \
-    --setenv="OPENREADER_BACKEND=$BACKEND" \
-    --setenv="OPENREADER_PYTHON=$ROOT_DIR/backend/.venv/bin/python" \
     "$CARGO_BIN" tauri dev
 fi
 

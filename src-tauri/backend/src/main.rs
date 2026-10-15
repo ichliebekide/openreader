@@ -1,7 +1,8 @@
-//! Standalone OpenReader backend (same API as the Python `openreader-backend`).
+//! Standalone OpenReader backend (the same HTTP/WebSocket API the app embeds).
 //!
 //! `openreader-backend`                      serve on $OPENREADER_HOST:$OPENREADER_PORT (127.0.0.1:8765)
-//! `openreader-backend --selection-helper`   native ext-data-control PRIMARY selection helper
+//! `openreader-backend --selection-helper`   Wayland PRIMARY selection helper (wl-clipboard-rs)
+//! `openreader-backend --download-voices`    download the default Piper voices
 
 use tracing_subscriber::EnvFilter;
 
@@ -11,6 +12,14 @@ fn main() {
     if args.iter().any(|argument| argument == "--selection-helper") {
         if let Err(error) = openreader_backend::selection_wayland::run() {
             eprintln!("OpenReader selection helper failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.iter().any(|argument| argument == "--download-voices") {
+        let result = openreader_backend::tts::piper::download_default_voices(|path| println!("{}", path.display()));
+        if let Err(error) = result {
+            eprintln!("voice download failed: {error:#}");
             std::process::exit(1);
         }
         return;

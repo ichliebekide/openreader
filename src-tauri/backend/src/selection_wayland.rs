@@ -1,65 +1,56 @@
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{Read, Write},
-    os::fd::{AsFd, FromRawFd},
-    sync::mpsc::{self, Sender},
-    thread,
-};
+//! `--selection-helper`: watch the Wayland PRIMARY selection and write each
+//! new selection as UTF-8 text followed by a NUL byte to stdout.
+//!
+//! Uses wl-clipboard-rs' event-driven watcher, which speaks both
+//! `ext-data-control-v1` (KDE Plasma 6.4+, current wlroots) and
+//! `wlr-data-control` (older wlroots compositors). This replaces the former
+//! hand-written ext-data-control client and the `wl-paste --watch` fallback.
+//! No polling, no keyboard hooks; the selection that exists at startup is not
+//! reported.
 
-use wayland_client::{
-    globals::{registry_queue_init, GlobalListContents},
-    protocol::{wl_registry, wl_seat::WlSeat},
-    Connection, Dispatch, Proxy, QueueHandle,
-};
-use wayland_protocols::ext::data_control::v1::client::{
-    ext_data_control_device_v1::{self, ExtDataControlDeviceV1},
-    ext_data_control_manager_v1::ExtDataControlManagerV1,
-    ext_data_control_offer_v1::{self, ExtDataControlOfferV1},
-};
+use std::io::{Read, Write};
+use std::sync::mpsc;
+use std::thread;
 
-const MAX_SELECTION_BYTES: usize = 2 * 1024 * 1024;
+use wl_clipboard_rs::paste::Seat;
+use wl_clipboard_rs::watch::{ClipboardEvent, ClipboardType, Watcher};
 
-struct SelectionState {
-    mime_types: HashMap<wayland_client::backend::ObjectId, Vec<String>>,
-    output: Sender<File>,
-    suppress_initial: bool,
-    running: bool,
-}
+pub const MAX_SELECTION_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn run() -> Result<(), String> {
     set_parent_death_signal()?;
 
-    let connection = Connection::connect_to_env().map_err(|error| error.to_string())?;
-    let (globals, mut event_queue) =
-        registry_queue_init::<SelectionState>(&connection).map_err(|error| error.to_string())?;
-    let queue_handle = event_queue.handle();
-
-    let manager: ExtDataControlManagerV1 = globals
-        .bind(&queue_handle, 1..=1, ())
-        .map_err(|error| format!("ext-data-control-v1 unavailable: {error}"))?;
-    let seat: WlSeat = globals
-        .bind(&queue_handle, 1..=9, ())
-        .map_err(|error| format!("Wayland seat unavailable: {error}"))?;
-
-    let (output, selections) = mpsc::channel();
+    let mut watcher = Watcher::new(ClipboardType::Primary, Seat::Unspecified).map_err(|error| error.to_string())?;
+    // Pipe readers go to a writer thread so a slow source application never
+    // blocks the Wayland event loop.
+    let (output, selections) = mpsc::channel::<os_pipe::PipeReader>();
     thread::spawn(move || write_selections(selections));
 
-    let mut state = SelectionState {
-        mime_types: HashMap::new(),
-        output,
-        suppress_initial: true,
-        running: true,
-    };
-    let _device = manager.get_data_device(&seat, &queue_handle, ());
-
-    while state.running {
-        event_queue
-            .blocking_dispatch(&mut state)
-            .map_err(|error| error.to_string())?;
+    // The first event reports the selection that already existed at startup.
+    let mut initial = true;
+    loop {
+        let Some(event) = watcher.next_event().map_err(|error| error.to_string())? else {
+            return Ok(());
+        };
+        let ClipboardEvent::Changed { mime_types, mut offer, .. } = event else {
+            initial = false;
+            continue;
+        };
+        if std::mem::take(&mut initial) {
+            continue;
+        }
+        let Some(mime_type) = preferred_mime_type(&mime_types) else {
+            continue;
+        };
+        match offer.receive(mime_type) {
+            Ok(reader) => {
+                if output.send(reader).is_err() {
+                    return Ok(());
+                }
+            }
+            Err(error) => eprintln!("OpenReader selection transfer failed: {error}"),
+        }
     }
-
-    Ok(())
 }
 
 fn set_parent_death_signal() -> Result<(), String> {
@@ -72,143 +63,64 @@ fn set_parent_death_signal() -> Result<(), String> {
     Ok(())
 }
 
-fn write_selections(selections: mpsc::Receiver<File>) {
+fn write_selections(selections: mpsc::Receiver<os_pipe::PipeReader>) {
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
-
     for mut selection in selections {
-        let mut bytes = Vec::new();
-        if Read::by_ref(&mut selection)
-            .take((MAX_SELECTION_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .is_err()
-            || bytes.len() > MAX_SELECTION_BYTES
-        {
+        let Some(bytes) = read_limited(&mut selection) else {
             continue;
-        }
-
-        if output.write_all(&bytes).is_err()
-            || output.write_all(&[0]).is_err()
-            || output.flush().is_err()
-        {
+        };
+        if output.write_all(&bytes).is_err() || output.write_all(&[0]).is_err() || output.flush().is_err() {
             break;
         }
     }
 }
 
-fn preferred_mime_type(mime_types: &[String]) -> Option<&str> {
-    const PREFERRED: [&str; 4] = [
-        "text/plain;charset=utf-8",
-        "text/plain",
-        "UTF8_STRING",
-        "STRING",
-    ];
+/// Read at most [`MAX_SELECTION_BYTES`]; larger selections are dropped.
+pub fn read_limited(source: &mut impl Read) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if source
+        .take((MAX_SELECTION_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() > MAX_SELECTION_BYTES
+    {
+        return None;
+    }
+    Some(bytes)
+}
 
+pub fn preferred_mime_type(mime_types: &[String]) -> Option<&str> {
+    const PREFERRED: [&str; 4] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "STRING"];
     PREFERRED
         .iter()
         .find(|candidate| mime_types.iter().any(|mime| mime == **candidate))
         .copied()
-        .or_else(|| {
-            mime_types
-                .iter()
-                .find(|mime| mime.starts_with("text/"))
-                .map(String::as_str)
-        })
+        .or_else(|| mime_types.iter().find(|mime| mime.starts_with("text/")).map(String::as_str))
 }
 
-fn request_selection(
-    state: &mut SelectionState,
-    offer: ExtDataControlOfferV1,
-) -> Result<(), String> {
-    let mime_types = state.mime_types.remove(&offer.id()).unwrap_or_default();
-    if state.suppress_initial {
-        state.suppress_initial = false;
-        offer.destroy();
-        return Ok(());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
     }
 
-    let Some(mime_type) = preferred_mime_type(&mime_types) else {
-        offer.destroy();
-        return Ok(());
-    };
-
-    let mut file_descriptors = [0; 2];
-    if unsafe { libc::pipe2(file_descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        offer.destroy();
-        return Err(std::io::Error::last_os_error().to_string());
+    #[test]
+    fn utf8_text_is_preferred() {
+        assert_eq!(
+            preferred_mime_type(&strings(&["text/html", "STRING", "text/plain;charset=utf-8"])),
+            Some("text/plain;charset=utf-8")
+        );
+        assert_eq!(preferred_mime_type(&strings(&["image/png", "text/html"])), Some("text/html"));
+        assert_eq!(preferred_mime_type(&strings(&["image/png"])), None);
     }
 
-    let reader = unsafe { File::from_raw_fd(file_descriptors[0]) };
-    let writer = unsafe { File::from_raw_fd(file_descriptors[1]) };
-    offer.receive(mime_type.to_string(), writer.as_fd());
-    drop(writer);
-    offer.destroy();
-
-    state.output.send(reader).map_err(|error| error.to_string())
-}
-
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for SelectionState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
-        _data: &GlobalListContents,
-        _connection: &Connection,
-        _queue_handle: &QueueHandle<Self>,
-    ) {
+    #[test]
+    fn oversized_selections_are_dropped() {
+        assert_eq!(read_limited(&mut &b"abc"[..]), Some(b"abc".to_vec()));
+        let big = vec![b'x'; MAX_SELECTION_BYTES + 1];
+        assert_eq!(read_limited(&mut &big[..]), None);
     }
-}
-
-wayland_client::delegate_noop!(SelectionState: ignore WlSeat);
-wayland_client::delegate_noop!(SelectionState: ignore ExtDataControlManagerV1);
-
-impl Dispatch<ExtDataControlOfferV1, ()> for SelectionState {
-    fn event(
-        state: &mut Self,
-        offer: &ExtDataControlOfferV1,
-        event: ext_data_control_offer_v1::Event,
-        _data: &(),
-        _connection: &Connection,
-        _queue_handle: &QueueHandle<Self>,
-    ) {
-        if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
-            state
-                .mime_types
-                .entry(offer.id())
-                .or_default()
-                .push(mime_type);
-        }
-    }
-}
-
-impl Dispatch<ExtDataControlDeviceV1, ()> for SelectionState {
-    fn event(
-        state: &mut Self,
-        _device: &ExtDataControlDeviceV1,
-        event: ext_data_control_device_v1::Event,
-        _data: &(),
-        _connection: &Connection,
-        _queue_handle: &QueueHandle<Self>,
-    ) {
-        match event {
-            ext_data_control_device_v1::Event::Selection { id: Some(offer) } => {
-                state.mime_types.remove(&offer.id());
-                offer.destroy();
-            }
-            ext_data_control_device_v1::Event::PrimarySelection { id: Some(offer) } => {
-                if let Err(error) = request_selection(state, offer) {
-                    eprintln!("OpenReader selection transfer failed: {error}");
-                }
-            }
-            ext_data_control_device_v1::Event::PrimarySelection { id: None } => {
-                state.suppress_initial = false;
-            }
-            ext_data_control_device_v1::Event::Finished => state.running = false,
-            _ => {}
-        }
-    }
-
-    wayland_client::event_created_child!(SelectionState, ExtDataControlDeviceV1, [
-        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ExtDataControlOfferV1, ()),
-    ]);
 }

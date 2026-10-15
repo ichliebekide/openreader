@@ -51,15 +51,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "linux": {
       "deb": {
-        "depends": ["libkf6config-bin", "qdbus-qt6", "pipewire-bin", "pipewire-alsa", "libasound2t64 | libasound2", "ffmpeg"]
+        "depends": [
+          "libkf6config-bin",
+          "pipewire-alsa",
+          "libasound2t64 | libasound2"
+        ],
+        "recommends": [
+          "tesseract-ocr",
+          "tesseract-ocr-deu"
+        ]
       }
-    },
-    "resources": {
-      "../backend/openreader_backend": "backend/openreader_backend",
-      "../backend/pyproject.toml": "backend/pyproject.toml"
     },
     "category": "Utility",
     "shortDescription": "Wayland-first AI TTS reader",

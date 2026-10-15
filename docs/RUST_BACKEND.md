@@ -1,18 +1,18 @@
-# Rust-Backend
+# Backend (Rust)
 
-Das Backend ist nach Rust portiert: `src-tauri/backend/` (Crate
-`openreader-backend`). OpenReader laeuft damit ohne Python. Das Python-Backend
-unter `backend/` bleibt vorerst als Fallback im Repository.
+Das Backend ist die Crate `openreader-backend` in `src-tauri/backend/`. Es
+wurde aus dem frueheren Python/FastAPI-Backend portiert; das Python-Backend ist
+entfernt. OpenReader braucht kein Python mehr.
 
-## API-Entscheidung
+## API
 
-Die React-UI spricht weiterhin HTTP/WebSocket auf `127.0.0.1:8765`. Das
-Rust-Backend bedient exakt dieselben Routen, JSON-Feldnamen (snake_case) und
-Statuscodes wie FastAPI (axum + tower-http CORS):
+Die React-UI spricht HTTP/WebSocket auf `127.0.0.1:8765` (axum, tower-http
+CORS). Routen, JSON-Feldnamen (snake_case) und Statuscodes entsprechen dem
+frueheren FastAPI-Dienst:
 
 | Route | Zweck |
 | --- | --- |
-| `GET /api/health` | Status; zusaetzlich `backend: "rust"` |
+| `GET /api/health` | Status (`backend: "rust"`) |
 | `GET/PUT /api/settings` | Einstellungen lesen/speichern |
 | `GET /api/desktop-context` | letzter KWin-Kontext |
 | `GET /api/tts/status` | Engine-Status |
@@ -20,32 +20,31 @@ Statuscodes wie FastAPI (axum + tower-http CORS):
 | `POST /api/tts/pause`, `/resume`, `/stop`, `/test` | Steuerung |
 | `POST /api/speak`, `POST /api/export` | Vorlesen, WAV-Export |
 | `POST /api/documents/extract` | PDF/EPUB/HTML/TXT/OCR-Import (multipart `file`) |
-| `WS /ws/events` | `selection`, `playback`, neu: `tts_fallback` |
+| `WS /ws/events` | `selection`, `playback`, `tts_fallback` |
 
-Begruendung: Keine riskanten Frontend-Umbauten (Fetch/WebSocket bleiben),
-dieselbe UI funktioniert gegen Rust- und Python-Backend, und `curl` bleibt
-zum Debuggen nutzbar. Tauri-Commands waeren nur fuer das Overlay noetig, das
-bereits ueber Commands angesteuert wird.
+Das Backend laeuft **im Tauri-Prozess** auf einer eigenen Tokio-Runtime
+(`server::spawn_background`). Das eigenstaendige Binary `openreader-backend`
+(`npm run backend`) bedient dieselbe API, z. B. zum Debuggen mit
+`OPENREADER_BACKEND=external npm run app:dev`.
 
-Das Backend laeuft standardmaessig **im Tauri-Prozess** auf einer eigenen
-Tokio-Runtime (`server::spawn_background`). Es gibt zusaetzlich das
-eigenstaendige Binary `openreader-backend` (z. B. `npm run backend`).
+Variablen: `OPENREADER_HOST`, `OPENREADER_PORT`, `OPENREADER_BACKEND=external`,
+`OPENREADER_SELECTION_HELPER`, `OPENREADER_AUDIO_DEVICE`, `OPENREADER_OCR`,
+`OPENREADER_OCRS_MODELS`, `OPENREADER_TESSERACT`, `OPENREADER_ESPEAK_DATA`,
+`RUST_LOG`. Log der App: `~/.cache/openreader/backend.log`.
 
-| `OPENREADER_BACKEND` | Verhalten der App |
-| --- | --- |
-| nicht gesetzt / `rust` | Rust-Backend im App-Prozess (Standard) |
-| `python` | altes Python-Backend als Kindprozess (`OPENREADER_PYTHON`) |
-| `external` | startet kein Backend (z. B. separat gestartetes `openreader-backend`) |
+Kommandos des Binarys:
 
-Weitere Variablen: `OPENREADER_HOST`, `OPENREADER_PORT`,
-`OPENREADER_SELECTION_HELPER`, `OPENREADER_PIPER` (Piper-CLI),
-`OPENREADER_TESSERACT`, `RUST_LOG`. Log der App: `~/.cache/openreader/backend.log`.
+```bash
+openreader-backend                      # API-Server
+openreader-backend --selection-helper   # PRIMARY-Selection-Helper (wl-clipboard-rs)
+openreader-backend --download-voices    # Standard-Piper-Stimmen laden
+openreader-backend --export-bindings D  # TypeScript-Typen schreiben
+```
 
 ## Generierte TypeScript-Typen
 
 Alle Typen an der API-Grenze leiten `ts_rs::TS` ab und werden nach
-`src/lib/generated/` exportiert (eingecheckt). `src/lib/backend.ts` und
-`App.tsx` importieren nur noch diese Typen.
+`src/lib/generated/` exportiert (eingecheckt).
 
 ```bash
 npm run bindings        # neu erzeugen
@@ -53,81 +52,79 @@ npm run bindings:check  # schlaegt fehl, wenn die Dateien veraltet sind
 ```
 
 `cargo test` enthaelt denselben Drift-Check (`bindings_are_up_to_date`).
-`i64`-Felder werden explizit als `number` exportiert.
 
-## Module
+## Bausteine
 
-| Python | Rust |
+| Bereich | Umsetzung |
 | --- | --- |
-| `models.py`, `settings.py` | `models.rs`, `settings.rs` (liest bestehende `settings.json` unveraendert, gleiche Migration, gleiche Default-Profile, gleiches Schreibformat) |
-| `events.py` | `events.rs` (16er-Queue pro Abonnent, aelteste Events fallen weg) |
-| `utils/text.py`, `utils/pronunciation.py` | `text.rs`, `pronunciation.rs` |
-| `services/safety.py` | `safety.rs` |
-| `services/clipboard_monitor.py` | `clipboard_monitor.rs` (nativer Helper, Klipper via zbus, `wl-paste`) |
-| `services/desktop_context.py` | `desktop_context.rs` (zbus, `org.openreader.Desktop`) |
-| `services/document_service.py` | `documents.rs` |
-| `tts/engines/edge_engine.py` + edge-tts 7.3.1 | `tts/edge/` (`drm.rs`, `communicate.rs`, `mod.rs`) |
-| `tts/engines/piper_engine.py`, `process_utils.py` | `tts/piper.rs`, `tts/process.rs` |
-| `tts/player.py` | `tts/player.rs` (`pw-cat`, SIGSTOP/SIGCONT) |
-| `tts/clocked_player.py` | `tts/clocked_player.rs` (ALSA-PCM `pipewire`/`pulse`) |
-| `tts/orchestrator.py`, `timing.py` | `tts/orchestrator.rs`, `tts/timing.rs` |
-| `main.py` | `server.rs` |
-| `src-tauri/src/selection_wayland.rs` | `selection_wayland.rs` (verschoben) |
+| Einstellungen | `settings.rs`: liest bestehende `settings.json` unveraendert, migriert alte Engines nur im Speicher, gleiche Default-Profile |
+| Auswahl | `selection_wayland.rs` (wl-clipboard-rs, ext-/wlr-data-control, als `--selection-helper`-Prozess), Klipper via zbus als KDE-Fallback, Debounce + `SelectionGuard` |
+| Desktop-Kontext | zbus-Dienst `org.openreader.Desktop` fuer das KWin-Skript |
+| Edge/Seraphina | `tts/edge/`: Port von edge-tts 7.3.1 (Websocket, Sec-MS-GEC v2, Uhrkorrektur bei 403), MP3-Dekodierung mit symphonia |
+| Piper | `tts/piper/`: espeak-ng (statisch, gepinnter Commit) + ONNX Runtime (`ort`) |
+| Wiedergabe | `tts/clocked_player.rs`: cpal, 12 x 20 ms Queue, DAC-Uhr fuer Wortfortschritt, Pause = Stille |
+| Fallback | Wechsel auf ein Piper-Profil nur vor dem ersten Audio; sichtbar als `tts_fallback`-Event und `notice` |
+| Dokumente | `documents.rs`: PDF mit `pdf-extract`/`lopdf`, EPUB (Spine), HTML (scraper), TXT; OCR mit Tesseract (Standard) oder ocrs |
 
-## Edge/Seraphina nativ
+### Piper
 
-- Websocket `wss://speech.platform.bing.com/.../edge/v1` mit
-  `TrustedClientToken`, `Sec-MS-GEC` (v2-Token aus edge-tts 7.3.1:
-  CS64 + SHA-256, 5-Minuten-Raster) und `Sec-MS-GEC-Version=2-143.0.3650.75`.
-  Testvektoren aus edge-tts 7.3.1 sind in `drm.rs` eingecheckt.
-- Bei HTTP 403 wird die Uhr anhand des `Date`-Headers korrigiert und einmal
-  erneut verbunden (wie edge-tts).
-- SSML mit `rate`/`volume`, Aufteilung nach 4096 Byte XML-escaptem Text,
-  `WordBoundary`-Offsets mit CBR-Offsetkompensation, `WordMatcher` fuer
-  UTF-16-Offsets.
-- MP3 wird wie bisher von `ffmpeg` fortlaufend in 24-kHz-PCM dekodiert.
+- espeak-ng wird im Build aus dem upstream-Commit `212928b` gebaut, den
+  piper-tts 1.4.2 verwendet (CMake + C-Compiler noetig; Quelle wird von GitHub
+  geladen oder per `OPENREADER_ESPEAK_SRC` lokal angegeben). Das Debian-Paket
+  1.52.0 phonemisiert anders (z. B. `ɾ` statt `r` nach Plosiven), deshalb wird
+  es nicht benutzt.
+- Die kompilierten espeak-Daten fuer de und en sind eingebettet
+  (`OPENREADER_ESPEAK_DICTS=de,en,fr` beim Build fuer mehr Sprachen) und werden
+  beim ersten Gebrauch nach `~/.cache/openreader/espeak-ng/<commit>-<groesse>/`
+  entpackt.
+- ONNX Runtime 1.31 kommt ueber `ort` mit `download-binaries`: beim Build wird
+  die vorgebaute statische Bibliothek von pykes CDN geladen und fest
+  eingelinkt. Das Binary hat zur Laufzeit keine onnxruntime-Abhaengigkeit.
+  Fuer Builds ohne Netz kann `ORT_LIB_LOCATION` auf eine eigene ONNX-Runtime
+  zeigen (siehe ort-Dokumentation).
+- Verifikation gegen piper-tts 1.4.2: identische Phonem-IDs auf einem Korpus
+  von 1313 deutschen Zeilen (README/Doku plus Testsaetze; Unterschiede nur bei
+  leeren Saetzen, die beide verwerfen), identische Samplezahlen und hoechstens
+  6 LSB Abweichung bei abgeschaltetem Rauschen fuer thorsten-medium,
+  kerstin-low und thorsten_emotional-medium. Werkzeuge:
+  `cargo run -p openreader-backend --example phonemize` und
+  `--example piper_compare -- <referenzverzeichnis>`.
 
-## Sichtbarer Fallback (neu)
+### OCR
 
-Faellt eine Stimme vor dem ersten Audio aus und ein anderes Piper-Profil
-uebernimmt, sendet das Backend
+- Standard ist Tesseract (`tesseract`-CLI, inkl. deutscher Sprachdaten).
+- Alternativ `ocrs` (reines Rust): Einstellung `ocr_engine: "ocrs"` oder
+  `OPENREADER_OCR=ocrs`. Die Modelle `text-detection.rten` und
+  `text-recognition.rten` (zusammen ca. 12 MB) werden beim ersten Gebrauch von
+  `https://ocrs-models.s3-accelerate.amazonaws.com/` nach
+  `~/.cache/openreader/ocrs/` geladen; `OPENREADER_OCRS_MODELS` zeigt auf ein
+  Verzeichnis mit vorhandenen Modellen (dann wird nichts geladen). Das
+  Standardalphabet von ocrs kennt keine Umlaute und kein ß.
 
-- ein WebSocket-Event `{"kind": "tts_fallback", "failed_engine", "failed_profile_id", "error", "fallback_engine", "fallback_profile_id", "message", "created_at"}` und
-- `notice` im Wiedergabezustand (`/api/tts/playback`, `/api/tts/reading`,
-  `playback`-Events) bis zur naechsten Anfrage.
+### PDF
 
-Die UI zeigt `notice` unter den Wiedergabeknoepfen an. Ausserdem wird jeder
-Fallback mit Ursache geloggt.
+Nur noch `pdf-extract`/`lopdf`. Ein mit LibreOffice erzeugtes zweispaltiges
+deutsches PDF ist Testfall (Umlaute, €, „“, –, Spaltenreihenfolge). Auf
+weiteren PDFs liegt die Wortuebereinstimmung mit poppler bei 0,89 bis 1,0.
 
-## Bewusste Abweichungen
+## Externe Laufzeitabhaengigkeiten
 
-- Piper-Rohaudio nutzt die Abtastrate aus der Stimmen-Konfiguration
-  (`audio.sample_rate`). Python nahm immer 22050 Hz aus dem Profil und spielte
-  die 16-kHz-Stimmen (Kerstin, Ramona) zu schnell ab.
-- Edge-Textaufteilung ohne Leerzeichen bleibt innerhalb von 4096 Byte (edge-tts
-  sucht dann im ganzen Rest und kann das Limit ueberschreiten).
-- PDF: `pdftotext` (poppler) wenn installiert, sonst die Rust-Crate
-  `pdf-extract`. Python nutzte pypdf; Leerzeichen/Zeilenumbrueche koennen
-  minimal abweichen, werden aber normalisiert.
-- `\uD800`-artige Escape-Sequenzen fuer einzelne Surrogates bleiben als Text
-  stehen (Python erzeugte einen ungueltigen String).
-- Der getaktete Player schreibt blockierend auf das ALSA-PCM `pipewire`
-  (Fallback `pulse`) statt PortAudio; Hardwaregeraete werden nie geoeffnet
-  oder abgefragt. Die DAC-Zeit kommt aus `snd_pcm_delay`.
-- Kein HTTP-Proxy fuer Edge (aiohttp nutzte `trust_env`).
+- **Tesseract** (optional, Standard-OCR), Sprachpakete wie `tesseract-ocr-deu`.
+- **ALSA-Bibliothek** (`libasound2`) und `pipewire-alsa` fuer die Ausgabe.
+- **KDE-Werkzeuge** (`kwriteconfig6`/`qdbus6`) fuer KWin-Regel und -Skript.
+- Netz fuer Seraphina und fuer das einmalige Laden von Stimmen/ocrs-Modellen.
+
+espeak-ng-Daten und ONNX Runtime sind eingebaut.
 
 ## Tests
 
 ```bash
 cd src-tauri
-cargo test                      # alle Unit-/API-Tests, inkl. Bindings-Drift
+cargo test                      # Unit-/API-Tests, KWin-Skript (boa), Bindings-Drift
 OPENREADER_TEST_EDGE=1 cargo test -p openreader-backend real_service_smoke_test -- --nocapture
-OPENREADER_TEST_PIPER=1 OPENREADER_PIPER=/pfad/zu/piper cargo test -p openreader-backend real_piper -- --nocapture
-OPENREADER_TEST_PIPEWIRE=1 cargo test -p openreader-backend real_ -- --test-threads=1   # sendet nur Stille
+OPENREADER_TEST_PIPER=1 cargo test -p openreader-backend real_piper -- --nocapture
+OPENREADER_TEST_PIPEWIRE=1 cargo test -p openreader-backend clocked_real -- --nocapture   # nur Stille
 OPENREADER_TEST_OCR=1 cargo test -p openreader-backend real_tesseract    # braucht tesseract-ocr-eng
+OPENREADER_TEST_OCRS=1 cargo test -p openreader-backend real_ocrs        # laedt ocrs-Modelle
+cargo run -p openreader --example check_overlay_focus   # Live-Fokuscheck, OpenReader muss laufen
 ```
-
-Die Python-Tests aus `backend/tests/` sind als Rust-Tests portiert
-(Settings-Migration, Textabschnitte, Wort-Timing, Edge-Rate/-Lautstaerke,
-Piper-Prozess, Player-Pause/Stop/Backpressure, getakteter Player,
-Fallback-Regeln, Reader-API, Dokumente/OCR, Klipper-Monitor).

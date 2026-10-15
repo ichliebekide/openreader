@@ -14,8 +14,8 @@ use futures::StreamExt;
 
 use super::clocked_player::ClockedAudioPlayer;
 use super::edge::EdgeEngine;
-use super::piper::{resolve_command, PiperEngine};
-use super::player::{AudioPlayer, Player};
+use super::piper::{espeak_available, PiperEngine};
+use super::player::Player;
 use super::{wav, ChunkStream, Encoding, Engine, ProgressCallback, WordBoundary};
 use crate::models::{ReaderSettings, TtsEngine, TtsEngineStatus, TtsStatusResponse, VoiceProfile};
 use crate::text::normalize_selection;
@@ -57,9 +57,11 @@ pub struct TtsOrchestrator {
 }
 
 fn default_player_factory() -> PlayerFactory {
-    Arc::new(|engine, on_progress| match (engine, on_progress) {
-        (TtsEngine::Edge, Some(callback)) => Arc::new(ClockedAudioPlayer::new(callback)) as Arc<dyn Player>,
-        _ => Arc::new(AudioPlayer::default()),
+    // One cpal player for every engine; only Edge delivers word timings, so
+    // Piper simply reports no words.
+    Arc::new(|_engine, on_progress| {
+        let callback = on_progress.unwrap_or_else(|| Arc::new(|_| {}));
+        Arc::new(ClockedAudioPlayer::new(callback)) as Arc<dyn Player>
     })
 }
 
@@ -71,7 +73,7 @@ impl TtsOrchestrator {
         Self {
             settings,
             engines,
-            player: Mutex::new(Arc::new(AudioPlayer::default())),
+            player: Mutex::new(Arc::new(ClockedAudioPlayer::new(Arc::new(|_| {})))),
             callbacks,
             player_factory: default_player_factory(),
         }
@@ -313,33 +315,31 @@ pub fn split_for_profile(text: &str) -> Vec<String> {
 }
 
 fn edge_status(profile: Option<&VoiceProfile>) -> TtsEngineStatus {
-    let ffmpeg_ok = crate::which("ffmpeg").is_some();
+    // Everything Edge needs is built in; reachability is only known per request.
     let voice = profile.and_then(|profile| profile.edge_voice.clone()).filter(|voice| !voice.is_empty());
-    let detail = match (&voice, ffmpeg_ok) {
-        (_, false) => "ffmpeg is required for streaming playback".to_string(),
-        (None, true) => "Microsoft voice name is missing".to_string(),
-        (Some(voice), true) => format!("{voice} (online)"),
+    let detail = match &voice {
+        None => "Microsoft voice name is missing".to_string(),
+        Some(voice) => format!("{voice} (online)"),
     };
     TtsEngineStatus {
         engine: TtsEngine::Edge,
-        available: ffmpeg_ok,
+        available: true,
         configured: voice.is_some(),
         detail,
     }
 }
 
 fn piper_status(profile: Option<&VoiceProfile>) -> TtsEngineStatus {
-    let command_ok = resolve_command().is_ok();
+    let espeak = espeak_available();
+    let command_ok = espeak.is_ok();
     let model_ok = profile
         .and_then(|profile| profile.piper_model_path.as_ref())
         .is_some_and(|path| path.exists());
-    let config_ok = profile
-        .and_then(|profile| profile.piper_config_path.as_ref())
-        .is_some_and(|path| path.exists());
-    let detail = if !command_ok {
-        "Piper CLI not found; run `./scripts/setup-tts.sh --piper`".to_string()
+    let config_ok = profile.and_then(super::piper::config_path).is_some();
+    let detail = if let Err(error) = espeak {
+        format!("espeak-ng unavailable: {error}")
     } else if !model_ok {
-        "Piper voice model missing; run `./scripts/setup-tts.sh --piper`".to_string()
+        "Piper voice model missing; run `./scripts/setup-tts.sh`".to_string()
     } else if !config_ok {
         "Piper config JSON missing".to_string()
     } else {

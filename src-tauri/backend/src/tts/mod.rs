@@ -1,5 +1,5 @@
 //! TTS pipeline: engines produce [`AudioChunk`] streams, the orchestrator adds
-//! fallback, and a player (PipeWire `pw-cat` or the clocked cpal output) plays them.
+//! fallback, and the cpal player plays them.
 
 pub mod clocked_player;
 pub mod edge;
