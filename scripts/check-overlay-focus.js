@@ -1,4 +1,4 @@
-// Companion probe for check-overlay-focus.py. Only the test window is activated.
+// Companion KWin probe for src-tauri/examples/check_overlay_focus.rs. Only the test window is activated.
 var sourceTitle = "OpenReader Focus Regression Check";
 
 function report(kind, win, expected) {
