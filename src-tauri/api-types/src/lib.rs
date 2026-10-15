@@ -260,7 +260,10 @@ pub struct ReaderSettings {
     pub min_selection_chars: i64,
     #[serde(default = "ReaderSettings::default_debounce", deserialize_with = "lenient_i64")]
     pub selection_debounce_ms: i64,
-    #[serde(default = "ReaderSettings::default_overlay_timeout", deserialize_with = "lenient_i64")]
+    #[serde(
+        default = "ReaderSettings::default_overlay_timeout",
+        deserialize_with = "lenient_i64"
+    )]
     pub overlay_timeout_ms: i64,
     #[serde(default = "VoiceProfile::default_engine")]
     pub backend_engine: TtsEngine,
@@ -489,7 +492,10 @@ impl<'de> Deserialize<'de> for ReaderEvent {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         let value = serde_json::Value::deserialize(deserializer)?;
-        let kind = value.get("kind").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let kind = value
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         match kind {
             "selection" => serde_json::from_value(value).map(ReaderEvent::Selection),
             "playback" => serde_json::from_value(value).map(ReaderEvent::Playback),
@@ -577,7 +583,15 @@ mod tests {
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["kind"], "playback");
         assert!(value["text"].is_null());
-        for key in ["speaking", "paused", "error", "session_id", "revision", "word_start", "word_end"] {
+        for key in [
+            "speaking",
+            "paused",
+            "error",
+            "session_id",
+            "revision",
+            "word_start",
+            "word_end",
+        ] {
             assert!(value.get(key).is_some(), "{key} missing");
         }
         let state = serde_json::to_value(PlaybackState::default()).unwrap();
@@ -649,7 +663,10 @@ mod tests {
             text: "Hallo".into(),
             ..Default::default()
         };
-        assert_eq!(serde_json::to_value(&request).unwrap(), serde_json::json!({ "text": "Hallo" }));
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({ "text": "Hallo" })
+        );
         let parsed: SpeakRequest = serde_json::from_str(r#"{"text":"x","profile_id":null}"#).unwrap();
         assert_eq!(parsed.profile_id, None);
     }

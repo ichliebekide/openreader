@@ -10,8 +10,8 @@ rust-version = "1.77"
 default-run = "openreader"
 
 [workspace]
-members = [".", "api-types", "backend"]
-default-members = [".", "api-types", "backend"]
+members = [".", "api-types", "backend", "ui-check"]
+default-members = [".", "api-types", "backend", "ui-check"]
 
 [lib]
 name = "openreader_lib"

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/target/
 src-tauri/target/
 backend/.venv/
 backend/.ruff_cache/

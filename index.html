@@ -1,13 +1,23 @@
 <!doctype html>
 <html lang="de">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="light dark" />
     <title>OpenReader</title>
+    <script>
+      // Before the wasm bundle loads: transparent overlay window, stored theme.
+      (function () {
+        var root = document.documentElement;
+        if (location.hash.indexOf("overlay") !== -1) root.classList.add("overlay");
+        try {
+          var theme = localStorage.getItem("openreader.theme");
+          if (theme === "light" || theme === "dark") root.setAttribute("data-theme", theme);
+        } catch (error) {}
+      })();
+    </script>
+    <link data-trunk rel="css" href="styles/app.css" />
+    <link data-trunk rel="rust" data-wasm-opt="z" />
   </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+  <body></body>
 </html>

@@ -1,0 +1,13 @@
+# Trunk builds the Leptos UI (Cargo.toml in this directory) into dist/.
+# Tauri runs `trunk serve` / `trunk build --release` (src-tauri/tauri.conf.json).
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+ignore = ["./src-tauri", "./target", "./dist", "./docs", "./scripts"]
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 1420
+open = false
