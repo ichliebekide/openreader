@@ -9,8 +9,7 @@ OpenReader besteht aus vier klaren Schichten:
    - System Tray
    - Hauptfenster
    - transparentes Overlay-Fenster
-   - startet das Rust-Backend im eigenen Prozess (Standard) oder optional
-     das alte Python-Backend (`OPENREADER_BACKEND=python`)
+   - startet das Rust-Backend im eigenen Prozess
 
 2. UI: `src/`
    - React/Vite
@@ -20,13 +19,13 @@ OpenReader besteht aus vier klaren Schichten:
    - WebSocket Event Stream
 
 3. Backend: `src-tauri/backend/` (Rust-Crate `openreader-backend`)
-   - axum REST und WebSocket, API identisch zum frueheren FastAPI-Backend
-   - nativer `ext-data-control-v1` PRIMARY Selection Helper
+   - axum REST und WebSocket (API des frueheren FastAPI-Backends)
+   - PRIMARY Selection Helper mit wl-clipboard-rs (ext-/wlr-data-control)
    - Selection Monitoring
-   - TTS Orchestration
-   - PDF/EPUB/OCR Services
-   - D-Bus Desktop Context Bridge
-   - Legacy: `backend/openreader_backend/` (Python/FastAPI, nur noch Fallback)
+   - TTS Orchestration: Seraphina (Edge-Websocket + symphonia), Piper
+     (espeak-ng + ONNX Runtime), Wiedergabe ueber cpal
+   - PDF/EPUB/OCR Services (pdf-extract, Tesseract oder ocrs)
+   - D-Bus Desktop Context Bridge (zbus)
 
 4. KDE Integration: `integrations/kwin/openreader-context/`
    - optionales KWin Script
@@ -76,11 +75,13 @@ Die TypeScript-Typen dieser API werden mit ts-rs aus den Rust-Structs erzeugt
 
 Das Backend kennt keine Tauri-Interna. Es publiziert Selection-Events und spielt Audio lokal ab.
 
-## Warum nur noch Rust?
+## Alles in Rust
 
-Frueher lagen Piper, Seraphina, OCR und Dokument-Parsing im Python-Backend.
-Seit der Portierung laufen Edge/Seraphina (Websocket, Sec-MS-GEC, Wort-Timing),
-Piper (CLI), Wiedergabe, Selection, D-Bus und Dokumentimport nativ in Rust.
-Externe Werkzeuge bleiben `ffmpeg` (MP3-Dekodierung), `pw-cat`, die Piper-CLI,
-`tesseract` und optional `pdftotext`. Das Python-Backend bleibt bis zur
-Entfernung als `OPENREADER_BACKEND=python` verfuegbar.
+Frueher lagen Piper, Seraphina, OCR und Dokument-Parsing in einem
+Python/FastAPI-Backend mit `ffmpeg`, `pw-cat`, `wl-paste`, der Piper-CLI und
+`pdftotext`. Heute laeuft all das im Rust-Prozess. Ausserhalb bleiben nur:
+
+- Tesseract (optionaler OCR-Standard; ocrs ist die reine Rust-Alternative),
+- die KWin-Integration (KWin-Skripte sind JavaScript; die Fokusregel wird mit
+  KDEs `kreadconfig6`/`kwriteconfig6` gepflegt),
+- die React-UI (wird separat ersetzt).

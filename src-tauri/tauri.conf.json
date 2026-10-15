@@ -58,7 +58,6 @@
       "deb": {
         "depends": [
           "libkf6config-bin",
-          "qdbus-qt6",
           "pipewire-alsa",
           "libasound2t64 | libasound2"
         ],

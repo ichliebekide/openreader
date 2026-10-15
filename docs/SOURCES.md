@@ -18,3 +18,16 @@ Abgleich am 1. September 2026.
 - Piper current upstream: https://github.com/OHF-Voice/piper1-gpl
 - piper-tts PyPI package: https://pypi.org/project/piper-tts/
 - Piper German Thorsten voice: https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/de/de_DE/thorsten/medium
+
+## Rust-Backend
+
+- piper1-gpl (Phonemisierung/Inferenz, espeak-ng-Commit `212928b` fuer piper-tts 1.4.2): https://github.com/OHF-Voice/piper1-gpl
+- espeak-ng: https://github.com/espeak-ng/espeak-ng
+- ort (ONNX Runtime fuer Rust): https://ort.pyke.io/
+- symphonia (MP3-Dekodierung): https://github.com/pdeljanov/Symphonia
+- cpal (Audioausgabe): https://github.com/RustAudio/cpal
+- wl-clipboard-rs (Data-Control-Watcher): https://github.com/YaLTeR/wl-clipboard-rs
+- ocrs (optionales OCR): https://github.com/robertknight/ocrs
+- pdf-extract / lopdf: https://github.com/jrmuizel/pdf-extract
+- boa (JavaScript-Engine fuer den KWin-Skript-Test): https://github.com/boa-dev/boa
+- ts-rs (TypeScript-Typen): https://github.com/Aleph-Alpha/ts-rs

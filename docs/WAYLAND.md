@@ -15,9 +15,10 @@ MVP:
 - Debounce: kurze Wartezeit, damit Drag-Markierungen nicht sofort feuern
 - Mindestlänge: konfigurierbar
 
-Unter KDE darf kein `wl-paste`-Polling laufen. KWin 6.4+ implementiert den
+Es laeuft kein `wl-paste` und kein Polling. KWin 6.4+ implementiert den
 standardisierten `ext-data-control-v1`-Pfad fuer Clipboard-Manager. OpenReader
-bindet ihn in einem nativen Rust-Helper und uebertraegt Text NUL-gerahmt an das
+bindet ihn (und `wlr-data-control` auf wlroots) ueber wl-clipboard-rs in einem
+Rust-Helper-Prozess und uebertraegt Text NUL-gerahmt an das
 Backend. Der alte rekursive Aufruf und schnelle Fallback-Abrufe bleiben
 entfernt, weil sie Fokus, Menues und Drag-Markierungen gestoert hatten.
 

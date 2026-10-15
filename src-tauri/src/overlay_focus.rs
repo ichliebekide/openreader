@@ -1,5 +1,8 @@
 use std::process::Command;
 
+// kreadconfig6/kwriteconfig6 stay: they are KDE's own KConfig tools and keep
+// the user's kwinrulesrc consistent (locking, escaping) for us.
+
 const RULE_ID: &str = "openreader-overlay-no-focus";
 const RULE: &[(&str, &str)] = &[
     (
@@ -37,16 +40,32 @@ pub fn ensure_kde_rule() -> Result<(), String> {
     changed |= ensure_value("General", "rules", &rules)?;
     changed |= ensure_value("General", "count", &rules.split(',').count().to_string())?;
     if changed {
-        run("qdbus6", &["org.kde.KWin", "/KWin", "reconfigure"])?;
-        // KWin debounces reconfiguration for 200 ms. Delay first mapping when
-        // installing/updating the rule, then make a compositor round trip.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        run(
-            "qdbus6",
-            &["org.kde.KWin", "/KWin", "org.freedesktop.DBus.Peer.Ping"],
-        )?;
+        reconfigure_kwin()?;
     }
     Ok(())
+}
+
+/// `org.kde.KWin /KWin reconfigure` over D-Bus (zbus; formerly `qdbus6`).
+/// KWin debounces reconfiguration for 200 ms. Delay first mapping when
+/// installing/updating the rule, then make a compositor round trip.
+fn reconfigure_kwin() -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime
+        .block_on(async {
+            let connection = zbus::Connection::session().await?;
+            connection
+                .call_method(Some("org.kde.KWin"), "/KWin", Some("org.kde.KWin"), "reconfigure", &())
+                .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            connection
+                .call_method(Some("org.kde.KWin"), "/KWin", Some("org.freedesktop.DBus.Peer"), "Ping", &())
+                .await?;
+            zbus::Result::Ok(())
+        })
+        .map_err(|error| format!("KWin overlay focus protection: D-Bus call failed: {error}"))
 }
 
 fn registered_rules(existing: &str) -> String {

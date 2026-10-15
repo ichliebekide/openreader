@@ -1,5 +1,13 @@
 # OpenReader Notes
 
+> Hinweis (Oktober 2026): Das Python-Backend wurde durch das Rust-Backend
+> ersetzt (`src-tauri/backend`, siehe [RUST_BACKEND.md](RUST_BACKEND.md)).
+> Eintraege unten, die `backend/`, `pw-cat`, `ffmpeg`, `wl-paste`, die
+> Piper-CLI oder Python-Tests nennen, beschreiben den damaligen Stand.
+> Aktuelle Pruefungen: `cd src-tauri && cargo test` (inkl. KWin-Skript-Test
+> in boa) und `cargo run -p openreader --example check_overlay_focus`.
+
+
 Diese Datei sammelt dauerhafte technische Entscheidungen, Betriebswissen und
 bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 [`FIX.md`](FIX.md).
