@@ -1,11 +1,10 @@
 //! Native Rust port of the OpenReader Python backend.
 //!
 //! The crate serves the same REST/WebSocket API as `backend/openreader_backend`
-//! (FastAPI) so the React UI keeps working unchanged. It can run inside the
+//! (FastAPI) so the UI keeps working unchanged. It can run inside the
 //! Tauri process ([`server::spawn_background`]) or standalone through the
 //! `openreader-backend` binary.
 
-pub mod bindings;
 pub mod clipboard_monitor;
 pub mod desktop_context;
 pub mod documents;
@@ -37,28 +36,8 @@ pub fn init_file_logging(path: &std::path::Path) {
         .try_init();
 }
 
-/// `$XDG_CONFIG_HOME` or `~/.config`, as Python's `Path(os.getenv(..., Path.home() / ".config"))`.
-pub fn config_home() -> std::path::PathBuf {
-    xdg_dir("XDG_CONFIG_HOME", ".config")
-}
-
-/// `$XDG_CACHE_HOME` or `~/.cache`.
-pub fn cache_home() -> std::path::PathBuf {
-    xdg_dir("XDG_CACHE_HOME", ".cache")
-}
-
-fn xdg_dir(variable: &str, fallback: &str) -> std::path::PathBuf {
-    match std::env::var_os(variable) {
-        Some(value) if !value.is_empty() => std::path::PathBuf::from(value),
-        _ => home_dir().join(fallback),
-    }
-}
-
-pub fn home_dir() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/"))
-}
+/// XDG/home directories (shared with the API models' default voice paths).
+pub use openreader_api::paths::{cache_home, config_home, home_dir};
 
 /// Locate an executable on `PATH` (like Python's `shutil.which`).
 pub fn which(command: &str) -> Option<std::path::PathBuf> {

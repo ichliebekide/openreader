@@ -6,27 +6,12 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 
-use serde::Serialize;
 use tokio::sync::Notify;
 
-use crate::models::{FallbackEvent, PlaybackEvent, SelectionEvent};
+/// Messages on `WS /ws/events` (defined in the shared `openreader-api` crate).
+pub use crate::models::ReaderEvent;
 
 pub const SUBSCRIBER_QUEUE: usize = 16;
-
-/// Messages on `WS /ws/events`, discriminated by their `kind` field.
-#[derive(Clone, Debug, PartialEq, Serialize, ts_rs::TS)]
-#[serde(untagged)]
-pub enum ReaderEvent {
-    Selection(SelectionEvent),
-    Playback(PlaybackEvent),
-    Fallback(FallbackEvent),
-}
-
-impl ReaderEvent {
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("event serialize")
-    }
-}
 
 struct Queue {
     events: Mutex<VecDeque<ReaderEvent>>,
@@ -92,7 +77,7 @@ impl Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::PlaybackState;
+    use crate::models::{PlaybackEvent, PlaybackState};
     use std::time::Duration;
 
     fn playback(revision: i64) -> ReaderEvent {

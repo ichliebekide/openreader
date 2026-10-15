@@ -2,7 +2,6 @@
 //!
 //! `openreader-backend`                      serve on $OPENREADER_HOST:$OPENREADER_PORT (127.0.0.1:8765)
 //! `openreader-backend --selection-helper`   native ext-data-control PRIMARY selection helper
-//! `openreader-backend --export-bindings D`  write the TypeScript API types into D
 
 use tracing_subscriber::EnvFilter;
 
@@ -12,17 +11,6 @@ fn main() {
     if args.iter().any(|argument| argument == "--selection-helper") {
         if let Err(error) = openreader_backend::selection_wayland::run() {
             eprintln!("OpenReader selection helper failed: {error}");
-            std::process::exit(1);
-        }
-        return;
-    }
-    if let Some(index) = args.iter().position(|argument| argument == "--export-bindings") {
-        let dir = args
-            .get(index + 1)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(openreader_backend::bindings::default_dir);
-        if let Err(error) = openreader_backend::bindings::export_all(&dir) {
-            eprintln!("binding export failed: {error}");
             std::process::exit(1);
         }
         return;

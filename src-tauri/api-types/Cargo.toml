@@ -1,0 +1,18 @@
+[package]
+name = "openreader-api"
+version = "0.1.0"
+description = "Serde models of the OpenReader HTTP/WebSocket API, shared by the backend and the Leptos UI (native + wasm32)."
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "openreader_api"
+path = "src/lib.rs"
+
+# Keep this crate wasm32-unknown-unknown compatible: no clock, no OS APIs
+# beyond `std::env` (which simply reports "unset" in the browser).
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -27,6 +27,7 @@ htmlize = { version = "1", features = ["unescape"] }
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 libc = "0.2"
+openreader-api = { path = "../api-types" }
 pdf-extract = "0.9"
 quick-xml = "0.37"
 rand = "0.8"
@@ -42,7 +43,6 @@ tokio-util = "0.7"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ts-rs = { version = "11", features = ["chrono-impl", "no-serde-warnings"] }
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 wayland-client = "0.31"
