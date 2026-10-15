@@ -14,7 +14,7 @@ use futures::StreamExt;
 
 use super::clocked_player::ClockedAudioPlayer;
 use super::edge::EdgeEngine;
-use super::piper::{resolve_command, PiperEngine};
+use super::piper::{espeak_available, PiperEngine};
 use super::player::{AudioPlayer, Player};
 use super::{wav, ChunkStream, Encoding, Engine, ProgressCallback, WordBoundary};
 use crate::models::{ReaderSettings, TtsEngine, TtsEngineStatus, TtsStatusResponse, VoiceProfile};
@@ -329,17 +329,16 @@ fn edge_status(profile: Option<&VoiceProfile>) -> TtsEngineStatus {
 }
 
 fn piper_status(profile: Option<&VoiceProfile>) -> TtsEngineStatus {
-    let command_ok = resolve_command().is_ok();
+    let espeak = espeak_available();
+    let command_ok = espeak.is_ok();
     let model_ok = profile
         .and_then(|profile| profile.piper_model_path.as_ref())
         .is_some_and(|path| path.exists());
-    let config_ok = profile
-        .and_then(|profile| profile.piper_config_path.as_ref())
-        .is_some_and(|path| path.exists());
-    let detail = if !command_ok {
-        "Piper CLI not found; run `./scripts/setup-tts.sh --piper`".to_string()
+    let config_ok = profile.and_then(super::piper::config_path).is_some();
+    let detail = if let Err(error) = espeak {
+        format!("espeak-ng unavailable: {error}")
     } else if !model_ok {
-        "Piper voice model missing; run `./scripts/setup-tts.sh --piper`".to_string()
+        "Piper voice model missing; run `./scripts/setup-tts.sh`".to_string()
     } else if !config_ok {
         "Piper config JSON missing".to_string()
     } else {
