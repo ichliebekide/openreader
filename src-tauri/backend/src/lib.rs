@@ -9,8 +9,10 @@ pub mod bindings;
 pub mod clipboard_monitor;
 pub mod desktop_context;
 pub mod documents;
+pub mod download;
 pub mod events;
 pub mod models;
+pub mod ocrs_engine;
 pub mod pronunciation;
 pub mod safety;
 #[cfg(target_os = "linux")]

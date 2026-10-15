@@ -82,11 +82,15 @@ pub fn default_speech_factory() -> SpeechFactory {
 
 pub trait DocumentExtractor: Send + Sync {
     fn extract_text(&self, path: &Path, language: &str) -> Result<String>;
+    fn set_ocr_engine(&self, _engine: OcrEngineKind) {}
 }
 
 impl DocumentExtractor for DocumentService {
     fn extract_text(&self, path: &Path, language: &str) -> Result<String> {
         DocumentService::extract_text(self, path, language)
+    }
+    fn set_ocr_engine(&self, engine: OcrEngineKind) {
+        self.set_engine(engine);
     }
 }
 
@@ -124,7 +128,7 @@ impl ReaderApp {
         Arc::new_cyclic(|weak: &Weak<ReaderApp>| {
             let tts = speech_factory(settings.clone(), Self::callbacks(weak.clone()));
             ReaderApp {
-                guard: Arc::new(SelectionGuard::new(settings)),
+                guard: Arc::new(SelectionGuard::new(settings.clone())),
                 settings: Mutex::new(store),
                 hub: Arc::new(EventHub::new()),
                 desktop: DesktopContext::new(),
@@ -136,7 +140,11 @@ impl ReaderApp {
                     revision: Utc::now().timestamp_micros(),
                     ..Default::default()
                 }),
-                documents: RwLock::new(Arc::new(DocumentService::default())),
+                documents: RwLock::new({
+                    let documents = DocumentService::default();
+                    documents.set_engine(settings.ocr_engine);
+                    Arc::new(documents)
+                }),
             }
         })
     }
@@ -316,6 +324,7 @@ impl ReaderApp {
         self.stop_speech_locked().await;
         let updated = self.settings.lock().unwrap().update(settings)?;
         self.guard.set_settings(updated.clone());
+        self.documents.read().unwrap().set_ocr_engine(updated.ocr_engine);
         let tts = (self.speech_factory)(updated.clone(), Self::callbacks(Arc::downgrade(self)));
         *self.tts.write().unwrap() = tts;
         Ok(updated)

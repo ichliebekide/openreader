@@ -27,12 +27,15 @@ htmlize = { version = "1", features = ["unescape"] }
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 libc = "0.2"
+ocrs = { version = "0.13", default-features = false, features = ["rten"] }
 os_pipe = "1"
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "download-binaries", "tls-rustls", "tracing"] }
 pdf-extract = "0.9"
 quick-xml = "0.37"
 rand = "0.8"
 regex = "1"
+rten = { version = "0.26", default-features = false, features = ["rten_format"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 scraper = "0.22"
 serde = { version = "1", features = ["derive"] }

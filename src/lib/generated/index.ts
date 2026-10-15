@@ -6,6 +6,7 @@ export type { DocumentExtractResponse } from "./DocumentExtractResponse";
 export type { ExportResponse } from "./ExportResponse";
 export type { FallbackEvent } from "./FallbackEvent";
 export type { HealthResponse } from "./HealthResponse";
+export type { OcrEngineKind } from "./OcrEngineKind";
 export type { PlaybackEvent } from "./PlaybackEvent";
 export type { PlaybackSnapshot } from "./PlaybackSnapshot";
 export type { PlaybackState } from "./PlaybackState";

@@ -271,6 +271,20 @@ pub struct ReaderSettings {
     pub excluded_window_classes: Vec<String>,
     #[serde(default = "default_voice_profiles")]
     pub voice_profiles: Vec<VoiceProfile>,
+    /// OCR engine for image imports (`OPENREADER_OCR` overrides it).
+    #[serde(default)]
+    pub ocr_engine: OcrEngineKind,
+}
+
+/// `tesseract` (default; external CLI, all installed languages incl. German)
+/// or `ocrs` (pure Rust, Latin letters without umlauts; models are
+/// downloaded on first use).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum OcrEngineKind {
+    #[default]
+    Tesseract,
+    Ocrs,
 }
 
 fn yes() -> bool {
@@ -300,6 +314,7 @@ impl Default for ReaderSettings {
             ignore_terminal_windows: true,
             excluded_window_classes: default_excluded_window_classes(),
             voice_profiles: default_voice_profiles(),
+            ocr_engine: OcrEngineKind::Tesseract,
         }
     }
 }
