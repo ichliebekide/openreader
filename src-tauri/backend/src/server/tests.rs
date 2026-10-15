@@ -332,6 +332,25 @@ async fn import_errors_and_empty_documents_return_422() {
 }
 
 #[tokio::test]
+async fn only_voice_settings_interrupt_a_running_reading() {
+    let (app, tts, _dir) = prepare();
+    call(&app, "POST", "/api/speak", Some(serde_json::json!({"text": "Hallo"}))).await;
+    tts.wait_started().await;
+
+    let mut settings = app.settings();
+    settings.overlay_bubble_size = 64;
+    settings.min_selection_chars = 5;
+    let (status, saved) = call(&app, "PUT", "/api/settings", Some(serde_json::to_value(&settings).unwrap())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["overlay_bubble_size"], 64);
+    assert_eq!(call(&app, "GET", "/api/tts/playback", None).await.1["speaking"], true);
+
+    settings.active_profile_id = Some("piper-de-kerstin".into());
+    call(&app, "PUT", "/api/settings", Some(serde_json::to_value(&settings).unwrap())).await;
+    assert_eq!(call(&app, "GET", "/api/tts/playback", None).await.1["speaking"], false);
+}
+
+#[tokio::test]
 async fn settings_roundtrip_and_cors() {
     let (app, _tts, dir) = prepare();
     let (status, settings) = call(&app, "GET", "/api/settings", None).await;

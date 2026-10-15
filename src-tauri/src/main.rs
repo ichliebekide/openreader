@@ -16,6 +16,7 @@ use std::{
     time::Duration,
 };
 
+use openreader_backend::models::ReaderSettings;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -76,10 +77,26 @@ fn start_backend() -> Option<openreader_backend::server::BackendHandle> {
 }
 
 #[tauri::command]
-fn show_overlay(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), String> {
+fn show_overlay(
+    app: tauri::AppHandle,
+    x: i32,
+    y: i32,
+    size: Option<u32>,
+) -> Result<(), String> {
     let window = app
         .get_webview_window("overlay")
         .ok_or_else(|| "Overlay window not found".to_string())?;
+
+    // `size` is the visible button diameter from the settings.
+    let face = size.unwrap_or(48).clamp(
+        ReaderSettings::OVERLAY_BUBBLE_MIN,
+        ReaderSettings::OVERLAY_BUBBLE_MAX,
+    );
+    #[cfg(target_os = "linux")]
+    overlay_input::resize(&window, (face + ReaderSettings::OVERLAY_BUBBLE_MARGIN) as i32);
+    window
+        .emit("overlay-size", face)
+        .map_err(|error| error.to_string())?;
 
     let desktop = std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()

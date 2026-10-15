@@ -278,6 +278,13 @@ pub struct ReaderSettings {
     /// OCR engine for image imports (`OPENREADER_OCR` overrides it).
     #[serde(default)]
     pub ocr_engine: OcrEngineKind,
+    /// Diameter of the visible overlay button in logical pixels; see
+    /// [`ReaderSettings::overlay_bubble_px`] for the accepted range.
+    #[serde(
+        default = "ReaderSettings::default_overlay_bubble_size",
+        deserialize_with = "lenient_i64"
+    )]
+    pub overlay_bubble_size: i64,
 }
 
 /// `tesseract` (default; external CLI, all installed languages incl. German)
@@ -320,6 +327,23 @@ impl ReaderSettings {
     fn default_overlay_timeout() -> i64 {
         4800
     }
+    fn default_overlay_bubble_size() -> i64 {
+        48
+    }
+
+    pub const OVERLAY_BUBBLE_MIN: u32 = 32;
+    pub const OVERLAY_BUBBLE_MAX: u32 = 96;
+    /// Transparent space around the visible button for its shadow and hover
+    /// scale; the overlay window and its input circle are face + margin.
+    pub const OVERLAY_BUBBLE_MARGIN: u32 = 24;
+
+    /// The visible button diameter, clamped to the supported range.
+    pub fn overlay_bubble_px(&self) -> u32 {
+        self.overlay_bubble_size.clamp(
+            Self::OVERLAY_BUBBLE_MIN as i64,
+            Self::OVERLAY_BUBBLE_MAX as i64,
+        ) as u32
+    }
 }
 
 impl Default for ReaderSettings {
@@ -334,6 +358,7 @@ impl Default for ReaderSettings {
             excluded_window_classes: default_excluded_window_classes(),
             voice_profiles: default_voice_profiles(),
             ocr_engine: OcrEngineKind::Tesseract,
+            overlay_bubble_size: Self::default_overlay_bubble_size(),
         }
     }
 }
@@ -551,6 +576,17 @@ mod tests {
         assert_eq!(profile.engine, TtsEngine::Edge);
         assert_eq!(profile.edge_voice.as_deref(), Some("de-DE-SeraphinaMultilingualNeural"));
         assert_eq!(profile.language, "German");
+    }
+
+    #[test]
+    fn overlay_bubble_size_defaults_and_is_clamped() {
+        let settings: ReaderSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(settings.overlay_bubble_px(), 48);
+        for (stored, px) in [(10, 32), (64, 64), (500, 96)] {
+            let settings: ReaderSettings =
+                serde_json::from_value(serde_json::json!({ "overlay_bubble_size": stored })).unwrap();
+            assert_eq!(settings.overlay_bubble_px(), px);
+        }
     }
 
     #[test]

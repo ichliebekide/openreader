@@ -233,9 +233,13 @@ mod tests {
         // The Rust writer uses the same field order and indentation as pydantic.
         let mut subset = settings.clone();
         subset.voice_profiles.truncate(1);
-        let expected = format!("{}],\n  \"ocr_engine\": \"tesseract\"\n}}", python.strip_suffix("]\n}").unwrap());
+        let expected = format!(
+            "{}],\n  \"ocr_engine\": \"tesseract\",\n  \"overlay_bubble_size\": 48\n}}",
+            python.strip_suffix("]\n}").unwrap()
+        );
         assert_eq!(to_json(&subset), expected);
         assert_eq!(settings.ocr_engine, crate::models::OcrEngineKind::Tesseract);
+        assert_eq!(settings.overlay_bubble_size, 48);
     }
 
     #[test]

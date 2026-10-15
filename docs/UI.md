@@ -68,10 +68,16 @@ Standard ist `http://127.0.0.1:8765`. Abweichend:
 
 ## Overlay
 
-Fenstergroesse (56 x 56), Fokusregel, Eingaberegion (56-px-Kreis in
-`overlay_input.rs`) und KWin-Positionierung sind unveraendert. Der Knopf fuellt
-den 56-px-Kreis, sichtbar ist eine 34-px-Flaeche in Textfarbe mit invertiertem
-Play-Symbol (Spinner waehrend der Anfrage) und leichtem Schatten. Ablauf wie
+Die Groesse ist einstellbar (Einstellungen -> Darstellung -> "Groesse der
+Vorlese-Blase", `overlay_bubble_size`, 32-96 px, Standard 48). Die UI gibt sie
+bei `show_overlay` mit; die Shell setzt Fenster und Eingaberegion
+(`overlay_input.rs`) auf Flaeche + 24 px und schickt `overlay-size` an die
+Overlay-Seite, die damit `--bubble-face` setzt. Fokusregel und
+KWin-Positionierung sind unveraendert. Der Knopf fuellt den Eingabekreis,
+sichtbar ist die Flaeche in Textfarbe mit invertiertem Play-Symbol (Spinner
+waehrend der Anfrage) und leichtem Schatten. Einstellungen ausserhalb von Stimme
+und Engine (Groesse, OCR, Auswahlregeln) unterbrechen eine laufende Wiedergabe
+nicht mehr. Ablauf wie
 bisher: `overlay-visibility` -> zwei Animation-Frames -> `set_overlay_input`,
 Ausblenden nach 4,8 s (neue Auswahl startet den Timer neu), Klick ->
 `/api/speak` -> `hide_overlay`.
@@ -109,7 +115,7 @@ Zeichenzahl, Datei-Import, zeitgesteuerte Wortmarkierung, eingefrorene
 Markierung bei Pause, Wiederherstellung nach Reload (Reading-Snapshot), Stopp,
 Importfehler (UTF-8), Fallback-Hinweis, Seitenleiste (Escape, Klick daneben),
 OCR-Auswahl, Hell/Dunkel/Override, Tempo-Anzeige, Layouts 1240x800, 1040x660,
-390x844 und der Overlay-Knopf (transparente Seite, 56/34 px). Die Overlay-
+390x844 und der Overlay-Knopf (transparente Seite, Standard 72/48 px). Die Overlay-
 Positionstests liegen seit Phase 2 in `src-tauri/tests/kwin_overlay_position.rs`,
 der Live-Fokustest in `src-tauri/examples/check_overlay_focus.rs`.
 

@@ -321,12 +321,22 @@ impl ReaderApp {
 
     pub async fn update_settings(self: &Arc<Self>, settings: ReaderSettings) -> Result<ReaderSettings> {
         let _lock = self.speech_lock.lock().await;
-        self.stop_speech_locked().await;
+        // Only voice changes need a new engine; anything else (selection
+        // rules, OCR, overlay size) must not interrupt a running reading.
+        let previous = self.settings();
+        let voice_changed = previous.backend_engine != settings.backend_engine
+            || previous.active_profile_id != settings.active_profile_id
+            || previous.voice_profiles != settings.voice_profiles;
+        if voice_changed {
+            self.stop_speech_locked().await;
+        }
         let updated = self.settings.lock().unwrap().update(settings)?;
         self.guard.set_settings(updated.clone());
         self.documents.read().unwrap().set_ocr_engine(updated.ocr_engine);
-        let tts = (self.speech_factory)(updated.clone(), Self::callbacks(Arc::downgrade(self)));
-        *self.tts.write().unwrap() = tts;
+        if voice_changed {
+            let tts = (self.speech_factory)(updated.clone(), Self::callbacks(Arc::downgrade(self)));
+            *self.tts.write().unwrap() = tts;
+        }
         Ok(updated)
     }
 }

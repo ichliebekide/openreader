@@ -32,6 +32,7 @@ serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
+  "CssStyleDeclaration",
   "Document",
   "DomRect",
   "Element",

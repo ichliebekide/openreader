@@ -162,8 +162,13 @@ impl AppState {
             text: event.text,
             char_count: event.char_count,
         });
+        let size = self
+            .settings
+            .with_untracked(|settings| settings.as_ref().map(ReaderSettings::overlay_bubble_px))
+            .unwrap_or(48);
         spawn_local(async move {
-            let _ = tauri::invoke("show_overlay", &tauri::OverlayPosition { x: x + 18, y: y + 18 }).await;
+            let position = tauri::OverlayPosition { x: x + 18, y: y + 18, size };
+            let _ = tauri::invoke("show_overlay", &position).await;
         });
     }
 

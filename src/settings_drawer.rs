@@ -3,7 +3,7 @@
 
 use leptos::ev;
 use leptos::prelude::*;
-use openreader_api::{OcrEngineKind, TtsEngine};
+use openreader_api::{OcrEngineKind, ReaderSettings, TtsEngine};
 use wasm_bindgen::JsCast;
 
 use crate::icons::{self, Icon};
@@ -356,6 +356,11 @@ fn DocumentsSection() -> impl IntoView {
 #[component]
 fn AppearanceSection() -> impl IntoView {
     let state = expect_context::<AppState>();
+    let bubble = Memo::new(move |_| {
+        state
+            .settings
+            .with(|s| s.as_ref().map(ReaderSettings::overlay_bubble_px).unwrap_or(48))
+    });
     view! {
         <section class="section">
             <h3>"Darstellung"</h3>
@@ -375,6 +380,38 @@ fn AppearanceSection() -> impl IntoView {
                     })
                     .collect_view()}
             </div>
+            <label class="field range">
+                <span class="range-label">
+                    "Größe der Vorlese-Blase" <output>{move || format!("{} px", bubble.get())}</output>
+                </span>
+                <div class="bubble-size-row">
+                    <input
+                        type="range"
+                        min=ReaderSettings::OVERLAY_BUBBLE_MIN
+                        max=ReaderSettings::OVERLAY_BUBBLE_MAX
+                        step="2"
+                        disabled=move || state.settings.with(Option::is_none)
+                        prop:value=move || bubble.get().to_string()
+                        on:input=move |event| {
+                            if let Ok(value) = input_value(&event).parse::<i64>() {
+                                state.update_settings(move |mut settings| {
+                                    settings.overlay_bubble_size = value;
+                                    settings
+                                });
+                            }
+                        }
+                    />
+                    <span class="bubble-preview-slot" aria-hidden="true">
+                        <span
+                            class="bubble-preview"
+                            style:width=move || format!("{}px", bubble.get())
+                            style:height=move || format!("{}px", bubble.get())
+                        >
+                            <Icon paths=icons::PLAY size=15 />
+                        </span>
+                    </span>
+                </div>
+            </label>
         </section>
     }
 }

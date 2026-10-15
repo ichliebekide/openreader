@@ -1,14 +1,17 @@
 //! Overlay window (`index.html#/overlay`): one round "read aloud" button.
 //!
 //! Window geometry, focus and input behaviour are owned by the Tauri shell
-//! (`src-tauri/src/main.rs`, `overlay_input.rs`): the window is 56x56 logical
-//! pixels and only a 56px circle accepts input. The button fills that circle;
-//! the visible face is 34px with a soft shadow for legibility on any desktop.
+//! (`src-tauri/src/main.rs`, `overlay_input.rs`): the window is a square of
+//! face + 24 logical pixels and only the inscribed circle accepts input. The
+//! button fills that circle; the visible face (`overlay_bubble_size`, default
+//! 48px, sent by the shell as `overlay-size`) has a soft shadow for legibility
+//! on any desktop.
 
 use std::time::Duration;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 use openreader_api::ReaderEvent;
 
 use crate::api;
@@ -33,6 +36,15 @@ pub fn OverlayApp() -> impl IntoView {
                 selection_sequence.update(|sequence| *sequence += 1);
             }
         }),
+    }));
+
+    spawn_local(tauri::listen_u32("overlay-size", |face| {
+        if let Some(root) = document().document_element() {
+            let _ = root
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("--bubble-face", &format!("{face}px"));
+        }
     }));
 
     spawn_local(tauri::listen_bool("overlay-visibility", move |shown| {
@@ -98,9 +110,9 @@ pub fn OverlayApp() -> impl IntoView {
             <span class="bubble-face">
                 {move || {
                     if busy.get() {
-                        view! { <Icon paths=icons::SPINNER size=16 class="spin" /> }.into_any()
+                        view! { <Icon paths=icons::SPINNER size=22 class="spin" /> }.into_any()
                     } else {
-                        view! { <Icon paths=icons::PLAY size=15 class="play-glyph" /> }.into_any()
+                        view! { <Icon paths=icons::PLAY size=21 class="play-glyph" /> }.into_any()
                     }
                 }}
             </span>

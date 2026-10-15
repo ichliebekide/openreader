@@ -19,7 +19,7 @@
   --ok: #3d8a58;
   --scrim: rgba(24, 23, 21, 0.22);
   --focus: rgba(186, 117, 23, 0.55);
-  --bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 3px 9px rgba(0, 0, 0, 0.22);
 
   --font-ui: "Noto Sans", system-ui, -apple-system, "Segoe UI", Cantarell, sans-serif;
   --font-reading: "Noto Serif", "Source Serif 4", "Source Serif Pro", "IBM Plex Serif", Georgia, "DejaVu Serif", serif;
@@ -98,6 +98,10 @@ body {
 html.overlay,
 html.overlay body {
   background: transparent;
+}
+
+html.overlay {
+  --bubble-face: 48px;
 }
 
 button,
@@ -663,12 +667,46 @@ input[type="range"] {
   color: var(--danger);
 }
 
+/* Live preview of the overlay button next to its size slider. */
+.bubble-size-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bubble-size-row input {
+  flex: 1;
+}
+
+.bubble-preview-slot {
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.bubble-preview {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--on-text);
+  background: var(--text);
+  box-shadow: var(--bubble-shadow);
+}
+
+.bubble-preview svg {
+  width: 44%;
+  height: 44%;
+}
+
 /* ------------------------------------------------------------ overlay bubble */
 
-/* Fills the 56px window and its circular input region (overlay_input.rs). */
+/* Fills the window (face + 24px) and its circular input region (overlay_input.rs).
+   --bubble-face comes from the overlay_bubble_size setting via the shell. */
 .overlay-bubble {
-  width: 56px;
-  height: 56px;
+  width: calc(var(--bubble-face) + 24px);
+  height: calc(var(--bubble-face) + 24px);
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -677,8 +715,8 @@ input[type="range"] {
 }
 
 .bubble-face {
-  width: 34px;
-  height: 34px;
+  width: var(--bubble-face);
+  height: var(--bubble-face);
   display: grid;
   place-items: center;
   border-radius: 50%;
@@ -686,6 +724,11 @@ input[type="range"] {
   background: var(--text);
   box-shadow: var(--bubble-shadow);
   transition: transform 120ms ease;
+}
+
+.bubble-face svg {
+  width: 44%;
+  height: 44%;
 }
 
 .overlay-bubble:hover .bubble-face {

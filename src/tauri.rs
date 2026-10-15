@@ -48,6 +48,8 @@ pub struct NoArgs {}
 pub struct OverlayPosition {
     pub x: i32,
     pub y: i32,
+    /// Visible button diameter (`ReaderSettings::overlay_bubble_px`).
+    pub size: u32,
 }
 
 #[derive(Serialize)]
@@ -57,14 +59,26 @@ pub struct OverlayInput {
 
 /// Subscribe to a Tauri event with a boolean payload for the page's lifetime.
 pub async fn listen_bool(event: &str, mut handler: impl FnMut(bool) + 'static) {
+    listen(event, move |payload| handler(payload.as_bool().unwrap_or(false))).await;
+}
+
+/// Subscribe to a Tauri event with a numeric payload for the page's lifetime.
+pub async fn listen_u32(event: &str, mut handler: impl FnMut(u32) + 'static) {
+    listen(event, move |payload| {
+        if let Some(value) = payload.as_f64() {
+            handler(value as u32);
+        }
+    })
+    .await;
+}
+
+async fn listen(event: &str, mut handler: impl FnMut(JsValue) + 'static) {
     if !available() {
         return;
     }
     let callback = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
         let payload = js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
-            .ok()
-            .and_then(|payload| payload.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(JsValue::UNDEFINED);
         handler(payload);
     });
     if tauri_listen(event, &callback).await.is_ok() {

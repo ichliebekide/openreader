@@ -43,7 +43,7 @@ function desktop(cursor) {
   loadKWinScript(workspace, callDBus);
   var win = {
     caption: "OpenReader Overlay:66:66:1", output: left,
-    frameGeometry: { x: 0, y: 0, width: 56, height: 56 },
+    frameGeometry: { x: 0, y: 0, width: 72, height: 72 },
     captionChanged: signal()
   };
   workspace.windowAdded.emit(win);
@@ -82,8 +82,8 @@ fn overlay_stays_on_the_pointer_monitor_at_an_internal_display_boundary() {
     run(r#"
       var d = desktop({ x: 2748, y: 1148 });
       d.flush();
-      assertEqual(d.win.frameGeometry.x, 2696, "x");
-      assertEqual(d.win.frameGeometry.y, 1096, "y");
+      assertEqual(d.win.frameGeometry.x, 2680, "x");
+      assertEqual(d.win.frameGeometry.y, 1080, "y");
       assertEqual(d.win.output, d.workspace.screens[0], "output");
     "#);
 }

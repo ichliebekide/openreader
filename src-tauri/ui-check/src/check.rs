@@ -386,7 +386,7 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     page.tab.press_key("Escape")?;
     page.wait("drawer closed (dark)", "!document.querySelector('.drawer.open')")?;
 
-    // Dokumente: the OCR engine is a backend setting (saving stops playback).
+    // Dokumente: the OCR engine is a backend setting; saving it must not stop playback.
     page.click("button[aria-label='Einstellungen']")?;
     page.wait("drawer open (ocr)", "document.querySelector('.drawer.open')")?;
     let ocr = page.eval("[...document.querySelectorAll('.ocr-select option')].map(o => o.textContent)")?;
@@ -403,12 +403,28 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
         ensure!(Instant::now() < deadline, "ocr engine not saved");
         std::thread::sleep(Duration::from_millis(50));
     }
+    ensure!(playback(fixture).speaking, "saving the OCR engine stopped playback");
+
+    // Darstellung: the overlay bubble size is saved and previewed live.
+    page.eval(
+        "(() => { const r = document.querySelector('.bubble-size-row input'); r.value = '64';
+                  r.dispatchEvent(new Event('input', { bubbles: true })); return true; })()",
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture.app.settings().overlay_bubble_size != 64 {
+        ensure!(Instant::now() < deadline, "bubble size not saved");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let preview = page.eval("document.querySelector('.bubble-preview').getBoundingClientRect().width")?;
+    ensure!(preview == serde_json::json!(64), "bubble preview {preview}");
+    ensure!(playback(fixture).speaking, "saving the bubble size stopped playback");
     page.eval("document.querySelector('.drawer-body').scrollTop = 1e6, true")?;
     page.screenshot("fokus-dark-settings-lower")?;
     page.tab.press_key("Escape")?;
     page.wait("drawer closed (ocr)", "!document.querySelector('.drawer.open')")?;
 
     // Speed readout cycles the tempo of the active profile (saved to the backend).
+    page.click("button[aria-label='Stoppen']")?;
     page.wait("stopped", "document.querySelector(\"button[aria-label='Vorlesen']\")")?;
     page.click(".speed-button")?;
     page.wait(
@@ -453,7 +469,7 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     let errors = page.errors()?;
     ensure!(errors.is_empty(), "page errors: {errors:?}");
 
-    // Overlay bubble: transparent page, 56px hit circle, 34px face.
+    // Overlay bubble: transparent page, 72px hit circle, 48px face.
     for scheme in ["light", "dark"] {
         page.color_scheme(scheme)?;
         // A fresh document: changing only the hash would not reload the bundle.
@@ -467,7 +483,7 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
                       const f = document.querySelector('.bubble-face').getBoundingClientRect();
                       return [b.width, b.height, f.width, f.height]; })()",
         )?;
-        ensure!(sizes == serde_json::json!([56, 56, 34, 34]), "overlay sizes {sizes}");
+        ensure!(sizes == serde_json::json!([72, 72, 48, 48]), "overlay sizes {sizes}");
         // Outside Tauri the bubble never becomes visible; show it for the picture
         // on a desktop-like background.
         page.eval(
