@@ -6,9 +6,8 @@ mod overlay_focus;
 mod overlay_input;
 
 use std::{
-    fs::{create_dir_all, OpenOptions},
+    fs::create_dir_all,
     path::PathBuf,
-    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
@@ -23,18 +22,10 @@ use tauri::{
     Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 
-/// The local API backend on 127.0.0.1:8765.
-///
-/// Default: the native Rust backend (`openreader-backend` crate) runs inside
-/// this process. `OPENREADER_BACKEND=python` starts the legacy Python/FastAPI
-/// backend instead; `OPENREADER_BACKEND=external` starts nothing (for a
-/// separately started `openreader-backend` binary or Python service).
-enum Backend {
-    Rust(openreader_backend::server::BackendHandle),
-    Python(Child),
-}
-
-struct BackendProcess(Mutex<Option<Backend>>);
+/// The local API backend on 127.0.0.1:8765 (`openreader-backend` crate),
+/// running inside this process. `OPENREADER_BACKEND=external` starts nothing,
+/// for a separately started `openreader-backend` binary (e.g. while debugging).
+struct BackendProcess(Mutex<Option<openreader_backend::server::BackendHandle>>);
 
 static OVERLAY_POSITION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -54,24 +45,15 @@ impl Drop for BackendProcess {
     }
 }
 
-fn stop_backend(backend: Option<Backend>) {
-    match backend {
-        Some(Backend::Rust(mut handle)) => handle.shutdown(),
-        Some(Backend::Python(child)) => stop_child(Some(child)),
-        None => {}
+fn stop_backend(backend: Option<openreader_backend::server::BackendHandle>) {
+    if let Some(mut handle) = backend {
+        handle.shutdown();
     }
 }
 
-fn start_backend(app: &tauri::AppHandle) -> Option<Backend> {
+fn start_backend() -> Option<openreader_backend::server::BackendHandle> {
     let mode = std::env::var("OPENREADER_BACKEND").unwrap_or_default().to_lowercase();
     match mode.as_str() {
-        "python" => match spawn_backend(app) {
-            Ok(child) => Some(Backend::Python(child)),
-            Err(error) => {
-                eprintln!("OpenReader: {error}");
-                None
-            }
-        },
         "external" | "none" => None,
         _ => {
             if let Some(log) = backend_log_path() {
@@ -83,7 +65,7 @@ fn start_backend(app: &tauri::AppHandle) -> Option<Backend> {
                 config.selection_helper = std::env::current_exe().ok();
             }
             match openreader_backend::server::spawn_background(config) {
-                Ok(handle) => Some(Backend::Rust(handle)),
+                Ok(handle) => Some(handle),
                 Err(error) => {
                     eprintln!("OpenReader: failed to start the Rust backend: {error}");
                     None
@@ -193,7 +175,7 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "linux")]
             overlay_focus::ensure_kde_rule().map_err(std::io::Error::other)?;
-            let backend = start_backend(app.handle());
+            let backend = start_backend();
             app.manage(BackendProcess(Mutex::new(backend)));
             configure_overlay(app.get_webview_window("overlay"));
             create_tray(app)?;
@@ -256,82 +238,6 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn spawn_backend(app: &tauri::AppHandle) -> Result<Child, String> {
-    let backend_dir = resolve_backend_dir(app);
-    let python = resolve_python(&backend_dir);
-
-    let mut command = Command::new(&python);
-    command
-        .arg("-m")
-        .arg("openreader_backend")
-        .current_dir(&backend_dir)
-        .env("PYTHONPATH", &backend_dir)
-        .env("OPENREADER_HOST", "127.0.0.1")
-        .env("OPENREADER_PORT", "8765")
-        .stdin(Stdio::null());
-
-    #[cfg(target_os = "linux")]
-    if let Ok(executable) = std::env::current_exe() {
-        command.env("OPENREADER_SELECTION_HELPER", executable);
-    }
-
-    if let Some(log) = open_backend_log() {
-        let stdout = log
-            .try_clone()
-            .map(Stdio::from)
-            .unwrap_or_else(|_| Stdio::null());
-        command.stdout(stdout).stderr(Stdio::from(log));
-    } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        unsafe {
-            command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() == 1 {
-                    libc::raise(libc::SIGTERM);
-                }
-                Ok(())
-            });
-        }
-    }
-
-    command.spawn().map_err(|error| {
-        format!(
-            "failed to start backend in {}: {error}",
-            backend_dir.display()
-        )
-    })
-}
-
-fn stop_child(child: Option<Child>) {
-    let Some(mut child) = child else {
-        return;
-    };
-
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn resolve_python(backend_dir: &std::path::Path) -> PathBuf {
-    if let Ok(python) = std::env::var("OPENREADER_PYTHON") {
-        return PathBuf::from(python);
-    }
-
-    let dev_venv = backend_dir.join(".venv/bin/python");
-    if dev_venv.exists() {
-        return dev_venv;
-    }
-
-    PathBuf::from("python3")
-}
-
 fn backend_log_path() -> Option<PathBuf> {
     let cache_home = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -339,36 +245,4 @@ fn backend_log_path() -> Option<PathBuf> {
     let dir = cache_home.join("openreader");
     create_dir_all(&dir).ok()?;
     Some(dir.join("backend.log"))
-}
-
-fn open_backend_log() -> Option<std::fs::File> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(backend_log_path()?)
-        .ok()
-}
-
-fn resolve_backend_dir(_app: &tauri::AppHandle) -> PathBuf {
-    #[cfg(debug_assertions)]
-    {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(|root| root.join("backend"))
-            .unwrap_or_else(|| PathBuf::from("../backend"))
-    }
-
-    #[cfg(not(debug_assertions))]
-    if let Ok(resource_dir) = _app.path().resource_dir() {
-        let packaged = resource_dir.join("backend");
-        if packaged.exists() {
-            return packaged;
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(|root| root.join("backend"))
-        .unwrap_or_else(|| PathBuf::from("../backend"))
 }

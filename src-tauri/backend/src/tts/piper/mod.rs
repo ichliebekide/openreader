@@ -93,6 +93,34 @@ impl Engine for PiperEngine {
     }
 }
 
+/// Voices of the default profiles: (voice id, path in rhasspy/piper-voices).
+pub const DEFAULT_VOICES: [(&str, &str); 6] = [
+    ("de_DE-mls-medium", "de/de_DE/mls/medium"),
+    ("de_DE-kerstin-low", "de/de_DE/kerstin/low"),
+    ("de_DE-ramona-low", "de/de_DE/ramona/low"),
+    ("de_DE-thorsten-high", "de/de_DE/thorsten/high"),
+    ("de_DE-thorsten_emotional-medium", "de/de_DE/thorsten_emotional/medium"),
+    ("de_DE-thorsten-medium", "de/de_DE/thorsten/medium"),
+];
+
+/// Download the default voices (model + config) from Hugging Face
+/// (`rhasspy/piper-voices`, revision v1.0.0) into the voice cache, skipping
+/// files that already exist. Replaces the Python `setup-tts.sh` download.
+pub fn download_default_voices(mut progress: impl FnMut(&std::path::Path)) -> Result<()> {
+    for (voice_id, remote) in DEFAULT_VOICES {
+        for suffix in [".onnx", ".onnx.json"] {
+            let target = crate::models::default_voice_cache_dir()
+                .join("piper")
+                .join(voice_id)
+                .join(format!("{voice_id}{suffix}"));
+            let url = format!("https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{remote}/{voice_id}{suffix}");
+            crate::download::ensure_file(&url, &target)?;
+            progress(&target);
+        }
+    }
+    Ok(())
+}
+
 /// Availability check for `/api/tts/status`: espeak-ng loads and the profile has a voice.
 pub fn espeak_available() -> Result<()> {
     espeak::clauses("de", "a").map(|_| ())
