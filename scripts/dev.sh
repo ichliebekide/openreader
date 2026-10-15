@@ -47,6 +47,8 @@ if [ "$BACKEND" = "python" ]; then
   export OPENREADER_PYTHON="$VENV_DIR/bin/python"
 fi
 
-npm install
+# UI toolchain: Leptos is built to WebAssembly by Trunk; `cargo tauri dev`
+# runs `trunk serve` (src-tauri/tauri.conf.json) and the Tauri app.
+"$ROOT_DIR/scripts/ensure-ui-toolchain.sh"
 
-npm run app:dev
+cargo tauri dev

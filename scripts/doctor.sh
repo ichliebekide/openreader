@@ -11,8 +11,17 @@ check() {
 
 check rustc
 check cargo
-check node
-check npm
+check trunk
+if cargo tauri --version >/dev/null 2>&1; then
+  printf "ok   cargo tauri\n"
+else
+  printf "miss cargo tauri (cargo install tauri-cli --locked)\n"
+fi
+if rustup target list --installed 2>/dev/null | grep -qx 'wasm32-unknown-unknown'; then
+  printf "ok   wasm32-unknown-unknown target\n"
+else
+  printf "miss wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown)\n"
+fi
 check wl-paste
 check tesseract
 check pdftotext

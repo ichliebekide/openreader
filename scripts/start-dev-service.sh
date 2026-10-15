@@ -3,9 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNIT="openreader-dev.service"
-NPM_BIN="$(command -v npm)"
-NODE_BIN_DIR="$(dirname "$(command -v node)")"
-RUNTIME_PATH="$NODE_BIN_DIR:$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+CARGO_BIN="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+RUNTIME_PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 BACKEND="${OPENREADER_BACKEND:-rust}"
 if [ "$BACKEND" = "python" ] && [ ! -x "$ROOT_DIR/backend/.venv/bin/python" ]; then
@@ -24,7 +23,7 @@ else
     --setenv="PATH=$RUNTIME_PATH" \
     --setenv="OPENREADER_BACKEND=$BACKEND" \
     --setenv="OPENREADER_PYTHON=$ROOT_DIR/backend/.venv/bin/python" \
-    "$NPM_BIN" run app:dev
+    "$CARGO_BIN" tauri dev
 fi
 
 for _ in {1..40}; do

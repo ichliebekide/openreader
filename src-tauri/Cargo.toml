@@ -11,7 +11,7 @@ default-run = "openreader"
 
 [workspace]
 members = [".", "api-types", "backend", "ui-check"]
-default-members = [".", "api-types", "backend", "ui-check"]
+default-members = [".", "api-types", "backend"]
 
 [lib]
 name = "openreader_lib"
