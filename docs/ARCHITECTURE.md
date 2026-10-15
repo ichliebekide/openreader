@@ -12,9 +12,9 @@ OpenReader besteht aus vier klaren Schichten:
    - startet das Rust-Backend im eigenen Prozess
 
 2. UI: `src/`
-   - React/Vite
-   - Settings UI
-   - Voice Profile UI
+   - Rust/Leptos (CSR), per Trunk nach WebAssembly gebaut ([UI](UI.md))
+   - Lesefenster "Fokus" mit Wortmarkierung und Player-Leiste
+   - Einstellungen als Seitenleiste
    - Overlay Bubble
    - WebSocket Event Stream
 
@@ -70,8 +70,9 @@ Die UI kennt keine Modell-Details. Sie spricht nur mit:
 - `POST /api/documents/extract`
 - `WS /ws/events`
 
-Die TypeScript-Typen dieser API werden mit ts-rs aus den Rust-Structs erzeugt
-(`src/lib/generated/`, `npm run bindings`). Details: [Rust-Backend](RUST_BACKEND.md).
+Die serde-Typen dieser API liegen in der wasm-faehigen Crate `openreader-api`
+(`src-tauri/api-types/`) und werden von Backend und UI direkt geteilt.
+Details: [Rust-Backend](RUST_BACKEND.md), [UI](UI.md).
 
 Das Backend kennt keine Tauri-Interna. Es publiziert Selection-Events und spielt Audio lokal ab.
 
@@ -84,4 +85,4 @@ Python/FastAPI-Backend mit `ffmpeg`, `pw-cat`, `wl-paste`, der Piper-CLI und
 - Tesseract (optionaler OCR-Standard; ocrs ist die reine Rust-Alternative),
 - die KWin-Integration (KWin-Skripte sind JavaScript; die Fokusregel wird mit
   KDEs `kreadconfig6`/`kwriteconfig6` gepflegt),
-- die React-UI (wird separat ersetzt).
+- nichts von der UI: sie ist ebenfalls Rust (Leptos/WebAssembly).

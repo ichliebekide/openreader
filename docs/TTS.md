@@ -83,7 +83,7 @@ Die API wartet zusaetzlich auf die Bereinigung der jeweiligen Engine.
   beim Schreiben jedes Blocks) und einer monotonen Uhr. Stille bei Pause/Unterversorgung zaehlt nicht als Textfortschritt.
   Die Genauigkeit haengt auch von Dienst, MP3-Dekoder und Audiotreiber ab;
   es wird keine samplegenaue akustische Synchronitaet behauptet.
-- Wortpositionen sind UTF-16-Offsets fuer React, auch hinter Emoji. Unbekannte
+- Wortpositionen sind UTF-16-Offsets (JavaScript-Stringindizes; die UI rechnet sie in Bytebereiche um), auch hinter Emoji. Unbekannte
   Service-Woerter erhalten keine erfundenen Positionen. Die GUI markiert nur im
   unveraenderlichen Text der laufenden Anfrage, scrollt nur das Lesefeld und
   setzt keinen Fokus. Nach Stop/Ende wird wieder die aktuelle Auswahl angezeigt.

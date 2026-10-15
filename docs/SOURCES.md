@@ -30,4 +30,7 @@ Abgleich am 1. September 2026.
 - ocrs (optionales OCR): https://github.com/robertknight/ocrs
 - pdf-extract / lopdf: https://github.com/jrmuizel/pdf-extract
 - boa (JavaScript-Engine fuer den KWin-Skript-Test): https://github.com/boa-dev/boa
-- ts-rs (TypeScript-Typen): https://github.com/Aleph-Alpha/ts-rs
+- Leptos: https://leptos.dev/ und https://book.leptos.dev/
+- Trunk: https://trunkrs.dev/
+- Tauri mit Leptos/Trunk: https://v2.tauri.app/start/frontend/leptos/
+- Tabler Icons (MIT): https://tabler.io/icons

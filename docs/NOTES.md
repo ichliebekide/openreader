@@ -122,7 +122,7 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
 - Die maximal drei Platzierungsversuche gelten nur fuer denselben Titel und
   ein noch registriertes Fenster. Entfernte Fenster werden aus der Liste
   geloescht; alte D-Bus-Antworten duerfen neuere Auswahlen nicht verschieben.
-- Platzierungstests ohne Desktop: `node --test scripts/check-overlay-position.test.mjs`.
+- Platzierungstests ohne Desktop: `cargo test --test kwin_overlay_position` (in `src-tauri/`).
 - Das Overlay erhaelt `skipSwitcher`, `skipTaskbar`, `skipPager` und `keepAbove`.
 
 ## Overlay-Lebenszyklus
@@ -158,7 +158,7 @@ bekannte Plattformgrenzen. Fehler und konkrete Reparaturen stehen in
   physische Position setzen.
 - Das Fenster wird vor `set_ignore_cursor_events` einmal realisiert, um einen
   Tao/GTK-Panic zu vermeiden.
-- Rust blendet das native Fenster nach 4,8 Sekunden aus. React steuert zusaetzlich
+- Rust blendet das native Fenster nach 4,8 Sekunden aus. Die Leptos-UI steuert zusaetzlich
   Animation und Interaktionszustand.
 - Ein Sequenzzaehler verhindert, dass der Timeout einer alten Auswahl ein neues
   Overlay versteckt.
@@ -270,9 +270,10 @@ tail -n 100 ~/.cache/openreader/backend.log
 Build-Verifikation:
 
 ```bash
-npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-backend/.venv/bin/python -m ruff check backend/openreader_backend
+trunk build --release
+cargo test
+cargo test --manifest-path src-tauri/Cargo.toml --workspace
+(cd src-tauri && cargo run -p openreader-ui-check)
 ```
 
 ## Bekannte Grenzen

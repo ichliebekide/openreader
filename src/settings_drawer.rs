@@ -3,7 +3,7 @@
 
 use leptos::ev;
 use leptos::prelude::*;
-use openreader_api::TtsEngine;
+use openreader_api::{OcrEngineKind, TtsEngine};
 use wasm_bindgen::JsCast;
 
 use crate::icons::{self, Icon};
@@ -79,6 +79,7 @@ pub fn SettingsDrawer() -> impl IntoView {
                 <VoiceSection />
                 <PlaybackSection />
                 <SelectionSection />
+                <DocumentsSection />
                 <AppearanceSection />
                 <ExportSection />
             </div>
@@ -305,6 +306,49 @@ fn SelectionSection() -> impl IntoView {
                     }
                 />
             </label>
+        </section>
+    }
+}
+
+#[component]
+fn DocumentsSection() -> impl IntoView {
+    let state = expect_context::<AppState>();
+    let ocr = Memo::new(move |_| state.settings.with(|s| s.as_ref().map(|s| s.ocr_engine)));
+
+    view! {
+        <section class="section">
+            <h3>"Dokumente"</h3>
+            <label class="field">
+                <span>"Texterkennung (OCR) für Bilder"</span>
+                <span class="select">
+                    <select
+                        class="ocr-select"
+                        disabled=move || ocr.get().is_none()
+                        on:change=move |event| {
+                            if let Some(engine) = OcrEngineKind::parse(&input_value(&event)) {
+                                state.update_settings(move |mut settings| {
+                                    settings.ocr_engine = engine;
+                                    settings
+                                });
+                            }
+                        }
+                    >
+                        {OcrEngineKind::ALL
+                            .into_iter()
+                            .map(|option| {
+                                view! {
+                                    <option value=option.as_str() selected=move || ocr.get() == Some(option)>
+                                        {logic::ocr_engine_label(option)}
+                                    </option>
+                                }
+                            })
+                            .collect_view()}
+                    </select>
+                </span>
+            </label>
+            <p class="field-note">
+                {move || ocr.get().map(logic::ocr_engine_hint).unwrap_or_default()}
+            </p>
         </section>
     }
 }

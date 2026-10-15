@@ -1,6 +1,6 @@
 //! Pure UI logic (no DOM), unit-tested natively with `cargo test`.
 
-use openreader_api::{HealthResponse, PlaybackState, ReaderSettings, TtsEngine, VoiceProfile};
+use openreader_api::{HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, TtsEngine, VoiceProfile};
 
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8765";
 
@@ -221,6 +221,20 @@ pub fn engine_option_label(engine: TtsEngine) -> &'static str {
     match engine {
         TtsEngine::Edge => "Microsoft Seraphina",
         TtsEngine::Piper => "Piper",
+    }
+}
+
+pub fn ocr_engine_label(engine: OcrEngineKind) -> &'static str {
+    match engine {
+        OcrEngineKind::Tesseract => "Tesseract",
+        OcrEngineKind::Ocrs => "ocrs (eingebaut)",
+    }
+}
+
+pub fn ocr_engine_hint(engine: OcrEngineKind) -> &'static str {
+    match engine {
+        OcrEngineKind::Tesseract => "Externes Programm, alle installierten Sprachen inklusive Deutsch.",
+        OcrEngineKind::Ocrs => "Ohne Zusatzprogramm, lateinische Schrift ohne Umlaute; lädt beim ersten Bild Modelle.",
     }
 }
 

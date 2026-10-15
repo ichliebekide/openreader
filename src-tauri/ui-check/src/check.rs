@@ -386,8 +386,29 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     page.tab.press_key("Escape")?;
     page.wait("drawer closed (dark)", "!document.querySelector('.drawer.open')")?;
 
+    // Dokumente: the OCR engine is a backend setting (saving stops playback).
+    page.click("button[aria-label='Einstellungen']")?;
+    page.wait("drawer open (ocr)", "document.querySelector('.drawer.open')")?;
+    let ocr = page.eval("[...document.querySelectorAll('.ocr-select option')].map(o => o.textContent)")?;
+    ensure!(
+        ocr == serde_json::json!(["Tesseract", "ocrs (eingebaut)"]),
+        "ocr options {ocr}"
+    );
+    page.eval(
+        "(() => { const s = document.querySelector('.ocr-select'); s.value = 'ocrs';
+                  s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()",
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture.app.settings().ocr_engine != openreader_api::OcrEngineKind::Ocrs {
+        ensure!(Instant::now() < deadline, "ocr engine not saved");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    page.eval("document.querySelector('.drawer-body').scrollTop = 1e6, true")?;
+    page.screenshot("fokus-dark-settings-lower")?;
+    page.tab.press_key("Escape")?;
+    page.wait("drawer closed (ocr)", "!document.querySelector('.drawer.open')")?;
+
     // Speed readout cycles the tempo of the active profile (saved to the backend).
-    page.click("button[aria-label='Stoppen']")?;
     page.wait("stopped", "document.querySelector(\"button[aria-label='Vorlesen']\")")?;
     page.click(".speed-button")?;
     page.wait(

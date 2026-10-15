@@ -59,5 +59,6 @@ Zur Laufzeit geladen (nicht im Paket):
 - ocrs-Modelle (nur wenn ocrs gewaehlt): beim ersten Gebrauch nach
   `~/.cache/openreader/ocrs/`.
 
-Build-Abhaengigkeiten: Rust, Node/npm, `cmake`, C-Compiler, `pkg-config`,
+Build-Abhaengigkeiten: Rust mit `wasm32-unknown-unknown`-Target, `trunk`,
+`tauri-cli` (`cargo tauri`), `cmake`, C-Compiler, `pkg-config`,
 `libasound2-dev`, `libwebkit2gtk-4.1-dev` (Tauri).

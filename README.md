@@ -15,7 +15,8 @@ Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Wind
 
 ```text
 OpenReader/
-  src/                         Tauri/Vite/React UI
+  src/, styles/, index.html    UI in Rust (Leptos, per Trunk nach WebAssembly)
+  src-tauri/api-types/         gemeinsame API-Typen (Backend + UI)
   src-tauri/                   Rust Desktop Shell, Tray, Overlay Window
   src-tauri/backend/           Rust-Backend (API, TTS, Selection, Dokumente)
   integrations/kwin/           KDE/KWin Context Bridge
@@ -28,7 +29,8 @@ OpenReader/
 
 OpenReader ist absichtlich zweigeteilt:
 
-- Frontend: Tauri-App mit Hauptfenster, transparentem Overlay und Tray.
+- Frontend: Tauri-App mit Hauptfenster, transparentem Overlay und Tray; die
+  Oberflaeche ist in Rust/Leptos geschrieben. Siehe [docs/UI.md](docs/UI.md).
 - Backend: lokaler HTTP/WebSocket-Dienst auf `127.0.0.1:8765`, in Rust, im
   Tauri-Prozess. Siehe [docs/RUST_BACKEND.md](docs/RUST_BACKEND.md).
 
@@ -66,20 +68,24 @@ Piper-Stimmen laden (Piper selbst ist eingebaut):
 
 ```bash
 ./scripts/doctor.sh
+OPENREADER_INSTALL_TOOLS=1 ./scripts/ensure-ui-toolchain.sh  # wasm32, trunk, tauri-cli
 ./scripts/install-kwin-script.sh
 ./scripts/dev.sh
 ```
 
-`scripts/dev.sh` startet Tauri mit dem Rust-Backend im App-Prozess. Python
-wird nicht benoetigt. Der erste Build laedt ONNX Runtime und den
+`scripts/dev.sh` startet `cargo tauri dev` (Trunk baut die Leptos-UI) mit dem
+Rust-Backend im App-Prozess. Weder Python noch Node/npm werden benoetigt.
+Der erste Build laedt ONNX Runtime und den
 espeak-ng-Quellcode (siehe [docs/PACKAGING.md](docs/PACKAGING.md)).
 
 Backend allein (ohne UI) und Tests:
 
 ```bash
-npm run backend                  # openreader-backend auf 127.0.0.1:8765
-cd src-tauri && cargo test       # Rust-Tests inkl. Bindings-Drift-Check
-npm run bindings                 # TypeScript-Typen aus Rust neu erzeugen
+cd src-tauri
+cargo run -p openreader-backend  # openreader-backend auf 127.0.0.1:8765
+cargo test                       # Backend-, API-Typ- und Shell-Tests
+cargo run -p openreader-ui-check # headless UI-Check (vorher: trunk build)
+cd .. && cargo test              # UI-Logik-Tests
 ```
 
 Fuer einen vom Terminal unabhaengigen Entwicklungsstart:

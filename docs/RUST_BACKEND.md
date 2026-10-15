@@ -6,7 +6,7 @@ entfernt. OpenReader braucht kein Python mehr.
 
 ## API
 
-Die React-UI spricht HTTP/WebSocket auf `127.0.0.1:8765` (axum, tower-http
+Die Leptos-UI spricht HTTP/WebSocket auf `127.0.0.1:8765` (axum, tower-http
 CORS). Routen, JSON-Feldnamen (snake_case) und Statuscodes entsprechen dem
 frueheren FastAPI-Dienst:
 
@@ -24,8 +24,8 @@ frueheren FastAPI-Dienst:
 
 Das Backend laeuft **im Tauri-Prozess** auf einer eigenen Tokio-Runtime
 (`server::spawn_background`). Das eigenstaendige Binary `openreader-backend`
-(`npm run backend`) bedient dieselbe API, z. B. zum Debuggen mit
-`OPENREADER_BACKEND=external npm run app:dev`.
+(`cargo run -p openreader-backend` in `src-tauri/`) bedient dieselbe API, z. B.
+zum Debuggen mit `OPENREADER_BACKEND=external ./scripts/dev.sh`.
 
 Variablen: `OPENREADER_HOST`, `OPENREADER_PORT`, `OPENREADER_BACKEND=external`,
 `OPENREADER_SELECTION_HELPER`, `OPENREADER_AUDIO_DEVICE`, `OPENREADER_OCR`,
@@ -38,20 +38,14 @@ Kommandos des Binarys:
 openreader-backend                      # API-Server
 openreader-backend --selection-helper   # PRIMARY-Selection-Helper (wl-clipboard-rs)
 openreader-backend --download-voices    # Standard-Piper-Stimmen laden
-openreader-backend --export-bindings D  # TypeScript-Typen schreiben
 ```
 
-## Generierte TypeScript-Typen
+## Gemeinsame API-Typen
 
-Alle Typen an der API-Grenze leiten `ts_rs::TS` ab und werden nach
-`src/lib/generated/` exportiert (eingecheckt).
-
-```bash
-npm run bindings        # neu erzeugen
-npm run bindings:check  # schlaegt fehl, wenn die Dateien veraltet sind
-```
-
-`cargo test` enthaelt denselben Drift-Check (`bindings_are_up_to_date`).
+Alle Typen an der API-Grenze liegen in `src-tauri/api-types/` (Crate
+`openreader-api`, wasm-faehig) und werden von `models.rs` re-exportiert. Die
+Leptos-UI nutzt dieselbe Crate; ts-rs und generierte TypeScript-Dateien gibt es
+nicht mehr. Siehe [UI](UI.md).
 
 ## Bausteine
 
