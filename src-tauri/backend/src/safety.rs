@@ -28,14 +28,22 @@ impl SelectionGuard {
     }
 
     pub fn accepts(&self, text: &str, context: &DesktopContextSnapshot) -> bool {
+        self.check(text, context).is_ok()
+    }
+
+    /// `Err` names why a selection is not offered for reading.
+    pub fn check(&self, text: &str, context: &DesktopContextSnapshot) -> Result<(), &'static str> {
         let settings = self.settings.read().unwrap();
         if (char_len(text.trim()) as i64) < settings.min_selection_chars {
-            return false;
+            return Err("shorter than the minimum length");
         }
         if settings.ignore_terminal_windows && is_excluded_app(&settings, context) {
-            return false;
+            return Err("terminal window");
         }
-        !looks_like_secret(text)
+        if looks_like_secret(text) {
+            return Err("looks like a secret");
+        }
+        Ok(())
     }
 }
 

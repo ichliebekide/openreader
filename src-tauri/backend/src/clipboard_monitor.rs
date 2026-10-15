@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -26,6 +26,17 @@ use crate::safety::SelectionGuard;
 use crate::text::{char_len, normalize_selection, preview, DEFAULT_PREVIEW_CHARS};
 
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+
+/// A helper that exits sooner than this is treated as unsupported here.
+const HELPER_STARTUP_GRACE: Duration = Duration::from_secs(3);
+
+async fn log_helper_stderr(stderr: tokio::process::ChildStderr) {
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        tracing::warn!("selection helper: {line}");
+    }
+}
 
 #[async_trait]
 pub trait SelectionSink: Send + Sync {
@@ -43,9 +54,15 @@ pub struct GuardedPublisher {
 impl SelectionSink for GuardedPublisher {
     async fn publish(&self, text: String, source: SelectionSource) {
         let snapshot = self.context.snapshot();
-        if !self.guard.accepts(&text, &snapshot) {
+        if let Err(reason) = self.guard.check(&text, &snapshot) {
+            tracing::info!(
+                "selection ignored ({reason}; {} chars, active window {:?})",
+                char_len(&text),
+                snapshot.active_resource_class.as_deref().unwrap_or("?")
+            );
             return;
         }
+        tracing::info!("selection published ({} chars)", char_len(&text));
         self.hub.publish(ReaderEvent::Selection(SelectionEvent {
             kind: "selection",
             text_preview: preview(&text, DEFAULT_PREVIEW_CHARS),
@@ -150,14 +167,25 @@ impl ClipboardMonitor {
 
     async fn watch_selection(&self) -> bool {
         if let Some(helper) = self.inner.helper.clone() {
+            let started = Instant::now();
             let watched = self
                 .watch_frames(Command::new(helper).arg("--selection-helper"))
                 .await;
             if watched || !self.running() {
                 return watched;
             }
+            // A helper that ran for a while worked on this desktop and only
+            // lost its connection (suspend, compositor hiccup): restart it.
+            // Klipper sees text selections only with matching Klipper
+            // settings, so it is the fallback for desktops without
+            // data-control support only.
+            if started.elapsed() >= HELPER_STARTUP_GRACE {
+                return true;
+            }
+            tracing::warn!("selection helper failed right after start; falling back to Klipper");
         }
         if is_kde_session() {
+            tracing::info!("watching selections through Klipper");
             return self.watch_klipper().await;
         }
         false
@@ -166,13 +194,23 @@ impl ClipboardMonitor {
     /// Read NUL-terminated frames from a child; `false` when the child ends or misbehaves.
     async fn watch_frames(&self, command: &mut Command) -> bool {
         command
-            .stdin(Stdio::null())
+            // The helper exits when this pipe closes, i.e. when we go away.
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let Ok(mut child) = command.spawn() else {
-            return false;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::warn!("selection helper could not be started: {error}");
+                return false;
+            }
         };
+        tracing::info!("selection helper started (pid {:?})", child.id());
+        let _stdin = child.stdin.take();
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(log_helper_stderr(stderr));
+        }
         let Some(mut stdout) = child.stdout.take() else {
             return false;
         };
@@ -198,6 +236,10 @@ impl ClipboardMonitor {
             }
         };
         terminate_child(&mut child, Duration::from_millis(400)).await;
+        if !result {
+            let status = child.try_wait().ok().flatten();
+            tracing::warn!("selection helper ended ({status:?}); restarting");
+        }
         result
     }
 

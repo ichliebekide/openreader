@@ -5,10 +5,15 @@ var bridgeAvailable = false;
 var bridgeCheckedAt = 0;
 var bridgeCheckInFlight = false;
 var contextReportInFlight = false;
+var contextReportSentAt = 0;
+var forcedReportPending = false;
 var overlayWindows = [];
 
 var sendIntervalMs = 120;
 var bridgeCheckIntervalMs = 5000;
+// KWin never calls the callback when a D-Bus call fails; treat a report
+// without a reply after this long as lost instead of blocking all reports.
+var reportReplyTimeoutMs = 1000;
 
 function nowMs() {
   return Date.now ? Date.now() : new Date().getTime();
@@ -162,9 +167,14 @@ function reportContext(force) {
   if (!bridgeAvailable) {
     return;
   }
-  if (contextReportInFlight) {
+  if (contextReportInFlight && nowMs() - contextReportSentAt < reportReplyTimeoutMs) {
+    // A window change must not be lost behind a pointer report in flight.
+    if (force) {
+      forcedReportPending = true;
+    }
     return;
   }
+  contextReportInFlight = false;
 
   var pos = workspace.cursorPos;
   if (!pos) {
@@ -185,6 +195,8 @@ function reportContext(force) {
   lastX = x;
   lastY = y;
   contextReportInFlight = true;
+  contextReportSentAt = t;
+  forcedReportPending = false;
 
   var active = currentWindowClass();
   callDBus(
@@ -201,6 +213,10 @@ function reportContext(force) {
       if (!(accepted === true || String(accepted) === "true")) {
         bridgeAvailable = false;
         bridgeCheckedAt = 0;
+        return;
+      }
+      if (forcedReportPending) {
+        reportContext(true);
       }
     }
   );

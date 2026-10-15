@@ -161,3 +161,71 @@ fn non_overlay_windows_and_malformed_titles_are_ignored() {
       assertEqual(d.win.frameGeometry.x, 4018, "malformed title keeps the old position");
     "#);
 }
+
+/// Context reports: a window change during a pointer report in flight is sent
+/// afterwards, and a report whose reply never comes does not block later ones.
+const CONTEXT_HARNESS: &str = r#"
+function contextDesktop() {
+  var calls = [];
+  var workspace = {
+    screens: [], cursorPos: { x: 10, y: 10 }, stackingOrder: [],
+    activeWindow: { resourceClass: "org.kde.konsole", resourceName: "konsole" },
+    cursorPosChanged: signal(), windowActivated: signal(),
+    windowAdded: signal(), windowRemoved: signal(),
+    sendClientToScreen: function () {}, screenAt: function () { return null; }
+  };
+  var callDBus = function () {
+    var args = Array.prototype.slice.call(arguments);
+    calls.push({ method: args[3], args: args.slice(4, -1), reply: args[args.length - 1] });
+  };
+  loadKWinScript(workspace, callDBus);
+  return {
+    workspace: workspace,
+    reports: function () { return calls.filter(function (c) { return c.method === "ReportContext"; }); },
+    answer: function (method, value) {
+      for (var i = 0; i < calls.length; i++) {
+        if (calls[i].method === method && !calls[i].answered) {
+          calls[i].answered = true;
+          calls[i].reply(value);
+          return;
+        }
+      }
+      throw new Error("no pending " + method);
+    }
+  };
+}
+"#;
+
+#[test]
+fn window_change_during_a_report_in_flight_is_not_lost() {
+    run(&format!(
+        r#"{CONTEXT_HARNESS}
+      var d = contextDesktop();
+      d.answer("NameHasOwner", true);
+      assertEqual(d.reports().length, 1, "initial report");
+      d.workspace.activeWindow = {{ resourceClass: "firefox", resourceName: "firefox" }};
+      d.workspace.windowActivated.emit();
+      assertEqual(d.reports().length, 1, "waits for the reply");
+      d.answer("ReportContext", true);
+      assertEqual(d.reports().length, 2, "sent after the reply");
+      assertEqual(d.reports()[1].args[2], "firefox", "new active window");
+    "#
+    ));
+}
+
+#[test]
+fn a_report_without_reply_expires() {
+    run(&format!(
+        r#"{CONTEXT_HARNESS}
+      var d = contextDesktop();
+      d.answer("NameHasOwner", true);
+      assertEqual(d.reports().length, 1, "initial report");
+      var realNow = Date.now;
+      Date.now = function () {{ return realNow() + 1500; }};
+      d.workspace.activeWindow = {{ resourceClass: "firefox", resourceName: "firefox" }};
+      d.workspace.windowActivated.emit();
+      Date.now = realNow;
+      assertEqual(d.reports().length, 2, "lost reply no longer blocks");
+    "#
+    ));
+}

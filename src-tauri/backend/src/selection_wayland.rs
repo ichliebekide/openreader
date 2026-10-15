@@ -7,18 +7,26 @@
 //! hand-written ext-data-control client and the `wl-paste --watch` fallback.
 //! No polling, no keyboard hooks; the selection that exists at startup is not
 //! reported.
+//!
+//! The helper exits when its stdin reaches EOF (the parent closed it or died).
 
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use wl_clipboard_rs::paste::Seat;
 use wl_clipboard_rs::watch::{ClipboardEvent, ClipboardType, Watcher};
 
 pub const MAX_SELECTION_BYTES: usize = 2 * 1024 * 1024;
 
+/// A source application that does not finish sending its selection within
+/// this time is skipped, so it cannot hold back later selections.
+pub const TRANSFER_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub fn run() -> Result<(), String> {
-    set_parent_death_signal()?;
+    exit_when_parent_closes_stdin();
 
     let mut watcher = Watcher::new(ClipboardType::Primary, Seat::Unspecified).map_err(|error| error.to_string())?;
     // Pipe readers go to a writer thread so a slow source application never
@@ -53,22 +61,28 @@ pub fn run() -> Result<(), String> {
     }
 }
 
-fn set_parent_death_signal() -> Result<(), String> {
-    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    if unsafe { libc::getppid() } == 1 {
-        return Err("selection helper parent already exited".to_string());
-    }
-    Ok(())
+/// `PR_SET_PDEATHSIG` fires when the spawning *thread* exits, which for a
+/// Tokio worker is not the parent's lifetime. A stdin pipe closes exactly
+/// when the parent process (or its monitor) goes away.
+fn exit_when_parent_closes_stdin() {
+    thread::spawn(|| {
+        let mut buffer = [0u8; 64];
+        let mut stdin = std::io::stdin();
+        while matches!(stdin.read(&mut buffer), Ok(count) if count > 0) {}
+        std::process::exit(0);
+    });
 }
 
 fn write_selections(selections: mpsc::Receiver<os_pipe::PipeReader>) {
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
-    for mut selection in selections {
-        let Some(bytes) = read_limited(&mut selection) else {
-            continue;
+    for selection in selections {
+        let bytes = match read_with_deadline(selection, TRANSFER_TIMEOUT) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("OpenReader selection skipped: {error}");
+                continue;
+            }
         };
         if output.write_all(&bytes).is_err() || output.write_all(&[0]).is_err() || output.flush().is_err() {
             break;
@@ -76,18 +90,48 @@ fn write_selections(selections: mpsc::Receiver<os_pipe::PipeReader>) {
     }
 }
 
-/// Read at most [`MAX_SELECTION_BYTES`]; larger selections are dropped.
-pub fn read_limited(source: &mut impl Read) -> Option<Vec<u8>> {
-    let mut bytes = Vec::new();
-    if source
-        .take((MAX_SELECTION_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() > MAX_SELECTION_BYTES
-    {
-        return None;
+/// Read a selection transfer completely within `timeout`. Larger selections
+/// than [`MAX_SELECTION_BYTES`] and transfers that do not finish in time are
+/// dropped; dropping the reader closes the pipe for the source application.
+pub fn read_with_deadline(reader: impl Read + AsRawFd, timeout: Duration) -> Result<Vec<u8>, String> {
+    let mut reader = reader;
+    let fd = reader.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
     }
-    Some(bytes)
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(count) => {
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.len() > MAX_SELECTION_BYTES {
+                    return Err("selection larger than 2 MiB".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(format!("source application did not send it within {timeout:?}"));
+                }
+                let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+                let millis = left.as_millis().clamp(1, i32::MAX as u128) as i32;
+                if unsafe { libc::poll(&mut poll, 1, millis) } < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(error.to_string());
+                    }
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
 }
 
 pub fn preferred_mime_type(mime_types: &[String]) -> Option<&str> {
@@ -118,9 +162,27 @@ mod tests {
     }
 
     #[test]
+    fn stalled_source_is_skipped_after_the_deadline() {
+        let (reader, mut writer) = os_pipe::pipe().unwrap();
+        writer.write_all(b"halb").unwrap();
+        let started = Instant::now();
+        let result = read_with_deadline(reader, Duration::from_millis(100));
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let (reader, mut writer) = os_pipe::pipe().unwrap();
+        writer.write_all(b"fertig").unwrap();
+        drop(writer);
+        assert_eq!(read_with_deadline(reader, Duration::from_millis(100)).unwrap(), b"fertig");
+    }
+
+    #[test]
     fn oversized_selections_are_dropped() {
-        assert_eq!(read_limited(&mut &b"abc"[..]), Some(b"abc".to_vec()));
-        let big = vec![b'x'; MAX_SELECTION_BYTES + 1];
-        assert_eq!(read_limited(&mut &big[..]), None);
+        let (reader, mut writer) = os_pipe::pipe().unwrap();
+        let feeder = thread::spawn(move || {
+            let _ = writer.write_all(&vec![b'x'; MAX_SELECTION_BYTES + 1]);
+        });
+        assert!(read_with_deadline(reader, Duration::from_secs(5)).is_err());
+        feeder.join().unwrap();
     }
 }
