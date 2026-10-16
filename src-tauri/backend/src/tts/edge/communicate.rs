@@ -16,6 +16,10 @@ pub const TICKS_PER_SECOND: i64 = 10_000_000;
 pub const MP3_BITRATE_BPS: i64 = 48_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(60);
+/// The service intermittently resets the connection or ends a turn without
+/// audio (edge-tts 7.3.1 sees the same); the same request usually succeeds
+/// on the next try. Delays before the 2nd and 3rd attempt.
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(250), Duration::from_millis(700)];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EdgeMessage {
@@ -424,27 +428,68 @@ pub fn communicate(text: &str, config: TtsConfig) -> impl Stream<Item = Result<E
             cumulative_audio_bytes: 0,
         }));
         for partial in texts {
-            let socket = match connect().await {
-                Ok(socket) => socket,
-                Err(ConnectError::Forbidden(date)) => {
-                    // Clock skew: adjust from the server date and retry once.
-                    let date = date.ok_or_else(|| anyhow!("No server date in headers."))?;
-                    drm::adjust_clock_skew(&date).map_err(|error| anyhow!(error))?;
-                    match connect().await {
-                        Ok(socket) => socket,
-                        Err(ConnectError::Forbidden(_)) => Err(anyhow!(
-                            "Microsoft-Sprachdienst lehnt die Anfrage ab (HTTP 403, Sec-MS-GEC)"
-                        ))?,
-                        Err(ConnectError::Other(error)) => Err(error)?,
+            let mut retries = RETRY_DELAYS.iter();
+            loop {
+                let failure = match connect_fixing_clock().await {
+                    Err(Rejected(error)) => Err(error)?,
+                    Err(Transient(error)) => error,
+                    Ok(socket) => {
+                        let mut part = Box::pin(stream_part(socket, config.clone(), partial.clone(), state.clone()));
+                        let mut yielded = false;
+                        let mut failure = None;
+                        while let Some(message) = part.next().await {
+                            match message {
+                                Ok(message) => {
+                                    yielded = true;
+                                    yield message;
+                                }
+                                Err(error) => {
+                                    failure = Some(error);
+                                    break;
+                                }
+                            }
+                        }
+                        match failure {
+                            None => break,
+                            // Retrying after audio went out would repeat spoken text.
+                            Some(error) if yielded => Err(error)?,
+                            Some(error) => error,
+                        }
                     }
-                }
-                Err(ConnectError::Other(error)) => Err(error)?,
-            };
-            let mut part = Box::pin(stream_part(socket, config.clone(), partial, state.clone()));
-            while let Some(message) = part.next().await {
-                yield message?;
+                };
+                let Some(delay) = retries.next() else {
+                    Err(failure)?
+                };
+                tracing::warn!("Microsoft-Sprachdienst: {failure:#}; neuer Versuch in {delay:?}");
+                tokio::time::sleep(*delay).await;
             }
         }
+    }
+}
+
+enum AttemptError {
+    /// Retrying cannot help (HTTP 403 even with the server clock).
+    Rejected(anyhow::Error),
+    Transient(anyhow::Error),
+}
+use AttemptError::{Rejected, Transient};
+
+async fn connect_fixing_clock() -> Result<Socket, AttemptError> {
+    match connect().await {
+        Ok(socket) => Ok(socket),
+        Err(ConnectError::Forbidden(date)) => {
+            // Clock skew: adjust from the server date and retry once.
+            let date = date.ok_or_else(|| Rejected(anyhow!("No server date in headers.")))?;
+            drm::adjust_clock_skew(&date).map_err(|error| Rejected(anyhow!(error)))?;
+            match connect().await {
+                Ok(socket) => Ok(socket),
+                Err(ConnectError::Forbidden(_)) => Err(Rejected(anyhow!(
+                    "Microsoft-Sprachdienst lehnt die Anfrage ab (HTTP 403, Sec-MS-GEC)"
+                ))),
+                Err(ConnectError::Other(error)) => Err(Transient(error)),
+            }
+        }
+        Err(ConnectError::Other(error)) => Err(Transient(error)),
     }
 }
 

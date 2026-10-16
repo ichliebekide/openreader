@@ -214,4 +214,29 @@ mod tests {
         assert!(words.len() >= 4);
         assert_eq!((words[0].start, words[0].end), (0, 5));
     }
+
+    /// Repeated requests against the real service (opt-in). The service
+    /// intermittently drops requests; retries must hide that.
+    #[tokio::test]
+    async fn real_service_repeated_requests_all_succeed() {
+        if std::env::var("OPENREADER_TEST_EDGE").as_deref() != Ok("1") {
+            return;
+        }
+        let texts = [
+            "Das ist toll \u{1F600}",
+            "Haus Baum Wasser schnell langsam heute morgen. Gestern Stadt Fluss Berg lesen schreiben. \
+             Sprechen hören Fenster Tür Buch Licht dunkel hell. Warm kalt Freund Arbeit Zeit Weg Frage \
+             Antwort. Fenster Tür Buch Licht, dunkel hell warm kalt; Freund Arbeit Zeit Weg Frage.",
+        ];
+        for round in 0..4 {
+            for text in texts {
+                let mut stream = EdgeEngine::default().synthesize(text.into(), profile());
+                let mut audio = 0;
+                while let Some(chunk) = stream.next().await {
+                    audio += chunk.unwrap_or_else(|error| panic!("round {round}: {error:#}")).data.len();
+                }
+                assert!(audio > 0, "round {round}: no audio");
+            }
+        }
+    }
 }
