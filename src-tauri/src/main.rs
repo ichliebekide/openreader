@@ -175,12 +175,9 @@ fn hide_overlay_window(window: &WebviewWindow) -> Result<(), String> {
 
 fn main() {
     #[cfg(target_os = "linux")]
-    if std::env::args_os().any(|argument| argument == "--selection-helper") {
-        if let Err(error) = openreader_backend::selection_wayland::run() {
-            eprintln!("OpenReader selection helper failed: {error}");
-            std::process::exit(1);
-        }
-        return;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.iter().any(|argument| argument == "--selection-helper") {
+        std::process::exit(openreader_backend::selection_wayland::helper_main(&args));
     }
 
     tauri::Builder::default()

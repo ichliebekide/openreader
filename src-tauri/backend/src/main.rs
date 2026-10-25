@@ -2,6 +2,7 @@
 //!
 //! `openreader-backend`                      serve on $OPENREADER_HOST:$OPENREADER_PORT (127.0.0.1:8765)
 //! `openreader-backend --selection-helper`   Wayland PRIMARY selection helper (wl-clipboard-rs)
+//! `openreader-backend --selection-helper --clipboard`   clipboard watcher (when PRIMARY is unsupported)
 //! `openreader-backend --download-voices`    download the default Piper voices
 
 use tracing_subscriber::EnvFilter;
@@ -10,11 +11,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     #[cfg(target_os = "linux")]
     if args.iter().any(|argument| argument == "--selection-helper") {
-        if let Err(error) = openreader_backend::selection_wayland::run() {
-            eprintln!("OpenReader selection helper failed: {error}");
-            std::process::exit(1);
-        }
-        return;
+        std::process::exit(openreader_backend::selection_wayland::helper_main(&args));
     }
     if args.iter().any(|argument| argument == "--download-voices") {
         let result = openreader_backend::tts::piper::download_default_voices(|path| println!("{}", path.display()));

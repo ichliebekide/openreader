@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
-use crate::clipboard_monitor::{ClipboardMonitor, GuardedPublisher};
+use crate::clipboard_monitor::{ClipboardMonitor, GuardedPublisher, SelectionStatus};
 use crate::desktop_context::{run_dbus_bridge, DesktopContext};
 use crate::documents::DocumentService;
 use crate::events::{EventHub, ReaderEvent};
@@ -114,6 +114,8 @@ pub struct ReaderApp {
     pub hub: Arc<EventHub>,
     pub desktop: DesktopContext,
     pub guard: Arc<SelectionGuard>,
+    /// Active selection source (set by the selection monitor).
+    pub selection_status: SelectionStatus,
     tts: RwLock<Arc<dyn Speech>>,
     speech_factory: SpeechFactory,
     speech_lock: tokio::sync::Mutex<()>,
@@ -132,6 +134,7 @@ impl ReaderApp {
                 settings: Mutex::new(store),
                 hub: Arc::new(EventHub::new()),
                 desktop: DesktopContext::new(),
+                selection_status: SelectionStatus::default(),
                 tts: RwLock::new(tts),
                 speech_factory,
                 speech_lock: tokio::sync::Mutex::new(()),
@@ -366,6 +369,7 @@ async fn health(State(app): AppState) -> Json<HealthResponse> {
         engine: app.settings().backend_engine,
         wayland_session: std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_lowercase() == "wayland",
         backend: Some("rust"),
+        selection_input: app.selection_status.get(),
     })
 }
 
@@ -609,7 +613,8 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
         }),
         settings.selection_debounce_ms,
         config.selection_helper.clone(),
-    );
+    )
+    .with_status(app.selection_status.clone());
     let integration = config.desktop_integration;
     let monitor_task = tokio::spawn({
         let monitor = monitor.clone();
@@ -635,7 +640,7 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
         .with_graceful_shutdown(shutdown)
         .await;
 
-    monitor.stop();
+    monitor.shutdown().await;
     app.stop_speech().await;
     monitor_task.abort();
     bridge_task.abort();

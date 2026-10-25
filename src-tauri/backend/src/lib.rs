@@ -15,6 +15,8 @@ pub mod ocrs_engine;
 pub mod pronunciation;
 pub mod safety;
 #[cfg(target_os = "linux")]
+pub mod selection_atspi;
+#[cfg(target_os = "linux")]
 pub mod selection_wayland;
 pub mod server;
 pub mod settings;

@@ -3611,6 +3611,7 @@ dependencies = [
  "unicode-normalization",
  "ureq 2.12.1",
  "uuid",
+ "wayland-client",
  "wl-clipboard-rs",
  "zbus",
  "zip",

@@ -18,6 +18,25 @@ pub mod paths;
 pub enum SelectionSource {
     Primary,
     Clipboard,
+    /// Selected text read over the accessibility bus (AT-SPI2).
+    Accessibility,
+}
+
+/// Where the backend currently gets selections from (`GET /api/health`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionInput {
+    /// The Wayland PRIMARY selection (data-control helper).
+    Primary,
+    /// Klipper over D-Bus (KDE without data-control support).
+    Klipper,
+    /// PRIMARY is not offered by the compositor: AT-SPI selections plus the
+    /// regular clipboard (Ctrl+C) as fallback.
+    Accessibility,
+    /// PRIMARY is not offered and AT-SPI is unavailable: clipboard only.
+    Clipboard,
+    /// No selection source is running.
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -472,6 +491,9 @@ pub struct HealthResponse {
     /// Which implementation serves the API (`"rust"`). Not read back by clients.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub backend: Option<&'static str>,
+    /// Active selection source; missing from older backends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_input: Option<SelectionInput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -751,5 +773,17 @@ mod tests {
         let python: HealthResponse =
             serde_json::from_str(r#"{"ok":true,"version":"0.1.0","engine":"piper","wayland_session":false}"#).unwrap();
         assert_eq!(python.backend, None);
+        assert_eq!(python.selection_input, None);
+        let current: HealthResponse = serde_json::from_str(
+            r#"{"ok":true,"version":"0.1.0","engine":"edge","wayland_session":true,"selection_input":"accessibility"}"#,
+        )
+        .unwrap();
+        assert_eq!(current.selection_input, Some(SelectionInput::Accessibility));
+    }
+
+    #[test]
+    fn selection_sources_serialize_lowercase() {
+        assert_eq!(serde_json::to_value(SelectionSource::Accessibility).unwrap(), "accessibility");
+        assert_eq!(serde_json::to_value(SelectionInput::Unavailable).unwrap(), "unavailable");
     }
 }

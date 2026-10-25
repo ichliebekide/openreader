@@ -1,12 +1,25 @@
-//! Port of `openreader_backend/services/clipboard_monitor.py`.
+//! Port of `openreader_backend/services/clipboard_monitor.py`, extended with
+//! automatic source selection.
 //!
-//! All Wayland desktops: the native selection helper (`<exe> --selection-helper`,
-//! wl-clipboard-rs with ext-/wlr-data-control, NUL framed text on stdout).
-//! On KDE without data-control support (older KWin) Klipper over D-Bus is the
-//! fallback. Candidates are debounced and then passed to a [`SelectionSink`]
-//! (normally guard + event hub).
+//! Sources, chosen at runtime without configuration:
+//!
+//! 1. PRIMARY: the native selection helper (`<exe> --selection-helper`,
+//!    wl-clipboard-rs with ext-/wlr-data-control, NUL framed text on stdout).
+//!    Best coverage, used whenever the compositor offers PRIMARY.
+//! 2. Without PRIMARY (the helper exits with
+//!    [`EXIT_PRIMARY_UNSUPPORTED`], e.g. KDE with middle-click paste off):
+//!    AT-SPI text selections ([`crate::selection_atspi`]) plus the regular
+//!    clipboard (`--selection-helper --clipboard`, Ctrl+C) as last resort. The
+//!    clipboard helper checks periodically whether PRIMARY is back and exits
+//!    with [`EXIT_PRIMARY_AVAILABLE`]; the monitor then switches back.
+//! 3. On KDE without data-control support (older KWin) Klipper over D-Bus.
+//!
+//! Helper candidates are debounced, AT-SPI candidates are debounced inside
+//! the AT-SPI source. The same text from two sources within
+//! [`DEDUPE_WINDOW`] (select, then Ctrl+C) is offered once. Everything goes
+//! to a [`SelectionSink`] (normally guard + event hub).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,11 +34,20 @@ use tokio::task::JoinHandle;
 
 use crate::desktop_context::DesktopContext;
 use crate::events::{EventHub, ReaderEvent};
-use crate::models::{SelectionEvent, SelectionSource};
+use crate::models::{SelectionEvent, SelectionInput, SelectionSource};
 use crate::safety::SelectionGuard;
+#[cfg(target_os = "linux")]
+use crate::selection_atspi::{self, AccessibilityFlag, SelectionReceiver};
 use crate::text::{char_len, normalize_selection, preview, DEFAULT_PREVIEW_CHARS};
 
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+
+/// Exit codes of `--selection-helper` (see `selection_wayland`).
+pub const EXIT_PRIMARY_UNSUPPORTED: i32 = 3;
+pub const EXIT_PRIMARY_AVAILABLE: i32 = 4;
+
+/// The same text from another source within this window is not offered again.
+pub const DEDUPE_WINDOW: Duration = Duration::from_secs(10);
 
 /// A helper that exits sooner than this is treated as unsupported here.
 const HELPER_STARTUP_GRACE: Duration = Duration::from_secs(3);
@@ -44,6 +66,8 @@ pub trait SelectionSink: Send + Sync {
 }
 
 /// Default sink: SelectionGuard check, then a `selection` event on the hub.
+/// The cursor position for the overlay comes from the KWin context, whatever
+/// the source.
 pub struct GuardedPublisher {
     pub hub: Arc<EventHub>,
     pub context: DesktopContext,
@@ -56,13 +80,13 @@ impl SelectionSink for GuardedPublisher {
         let snapshot = self.context.snapshot();
         if let Err(reason) = self.guard.check(&text, &snapshot) {
             tracing::info!(
-                "selection ignored ({reason}; {} chars, active window {:?})",
+                "selection ignored ({reason}; {} chars via {source:?}, active window {:?})",
                 char_len(&text),
                 snapshot.active_resource_class.as_deref().unwrap_or("?")
             );
             return;
         }
-        tracing::info!("selection published ({} chars)", char_len(&text));
+        tracing::info!("selection published ({} chars via {source:?})", char_len(&text));
         self.hub.publish(ReaderEvent::Selection(SelectionEvent {
             kind: "selection",
             text_preview: preview(&text, DEFAULT_PREVIEW_CHARS),
@@ -91,11 +115,89 @@ impl KlipperSource for KlipperProxy {
     }
 }
 
+/// The active selection source, shown in `GET /api/health`. Changes are logged.
+#[derive(Clone, Default)]
+pub struct SelectionStatus(Arc<Mutex<Option<SelectionInput>>>);
+
+impl SelectionStatus {
+    pub fn get(&self) -> Option<SelectionInput> {
+        *self.0.lock().unwrap()
+    }
+
+    pub fn set(&self, input: SelectionInput) {
+        let previous = self.0.lock().unwrap().replace(input);
+        if previous != Some(input) {
+            tracing::info!("selection source: {}", describe_input(input));
+        }
+    }
+}
+
+pub fn describe_input(input: SelectionInput) -> &'static str {
+    match input {
+        SelectionInput::Primary => "PRIMARY selection (data-control helper)",
+        SelectionInput::Klipper => "Klipper over D-Bus",
+        SelectionInput::Accessibility => "AT-SPI text selections, clipboard (Ctrl+C) as fallback; no PRIMARY",
+        SelectionInput::Clipboard => "clipboard only (Ctrl+C); no PRIMARY and no AT-SPI",
+        SelectionInput::Unavailable => "none",
+    }
+}
+
+/// Last offered text per source, for cross-source deduplication.
+#[derive(Default)]
+pub struct RecentSelections {
+    entries: Vec<(SelectionSource, String, Instant)>,
+}
+
+impl RecentSelections {
+    /// Whether another source offered `text` within [`DEDUPE_WINDOW`] before `now`.
+    pub fn offered_elsewhere(&self, text: &str, source: SelectionSource, now: Instant) -> bool {
+        self.entries.iter().any(|(other, offered, at)| {
+            *other != source && offered == text && now.saturating_duration_since(*at) < DEDUPE_WINDOW
+        })
+    }
+
+    pub fn record(&mut self, text: &str, source: SelectionSource, now: Instant) {
+        self.entries.retain(|(other, _, _)| *other != source);
+        self.entries.push((source, text.to_string(), now));
+    }
+
+    /// Check and record in one step; `false` when the text is a duplicate.
+    pub fn admit(&mut self, text: &str, source: SelectionSource, now: Instant) -> bool {
+        if self.offered_elsewhere(text, source, now) {
+            tracing::info!("selection via {source:?} skipped: just offered by another source");
+            return false;
+        }
+        self.record(text, source, now);
+        true
+    }
+}
+
 #[derive(Default)]
 struct CandidateState {
     last_text: String,
     observed_text: String,
     pending: Option<JoinHandle<()>>,
+    recent: RecentSelections,
+    /// Last AT-SPI selection; the same selection reported again (focus
+    /// changes) is not offered twice until it was cleared.
+    accessible_text: String,
+}
+
+/// What ended a helper process.
+#[derive(Debug)]
+pub enum HelperOutcome {
+    /// The monitor was stopped.
+    Stopped,
+    /// The helper could not be started or its output ended.
+    Ended { code: Option<i32>, ran_for: Duration },
+}
+
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 struct Inner {
@@ -104,6 +206,11 @@ struct Inner {
     helper: Option<PathBuf>,
     running: AtomicBool,
     state: Mutex<CandidateState>,
+    status: SelectionStatus,
+    /// AT-SPI source when PRIMARY is unsupported (`OPENREADER_ATSPI=0` disables it).
+    accessibility: bool,
+    #[cfg(target_os = "linux")]
+    flag: Arc<AccessibilityFlag>,
 }
 
 #[derive(Clone)]
@@ -119,6 +226,16 @@ impl ClipboardMonitor {
     }
 
     pub fn with_debounce(sink: Arc<dyn SelectionSink>, debounce: Duration, helper: Option<PathBuf>) -> Self {
+        Self::build(sink, debounce, helper, SelectionStatus::default(), accessibility_from_env())
+    }
+
+    fn build(
+        sink: Arc<dyn SelectionSink>,
+        debounce: Duration,
+        helper: Option<PathBuf>,
+        status: SelectionStatus,
+        accessibility: bool,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 sink,
@@ -126,13 +243,40 @@ impl ClipboardMonitor {
                 helper,
                 running: AtomicBool::new(true),
                 state: Mutex::new(CandidateState::default()),
+                status,
+                accessibility,
+                #[cfg(target_os = "linux")]
+                flag: Arc::new(AccessibilityFlag::new(AccessibilityFlag::default_marker())),
             }),
         }
+    }
+
+    /// Report the active source into `status` (shared with the API).
+    pub fn with_status(self, status: SelectionStatus) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| panic!("with_status before cloning"));
+        Self::build(inner.sink, inner.debounce, inner.helper, status, inner.accessibility)
+    }
+
+    /// Without the AT-SPI source (tests, `OPENREADER_ATSPI=0`).
+    pub fn without_accessibility(self) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| panic!("without_accessibility before cloning"));
+        Self::build(inner.sink, inner.debounce, inner.helper, inner.status, false)
+    }
+
+    pub fn status(&self) -> SelectionStatus {
+        self.inner.status.clone()
     }
 
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
         self.cancel_pending();
+    }
+
+    /// Stop and switch accessibility off again if OpenReader switched it on.
+    pub async fn shutdown(&self) {
+        self.stop();
+        #[cfg(target_os = "linux")]
+        self.inner.flag.restore().await;
     }
 
     fn running(&self) -> bool {
@@ -142,6 +286,7 @@ impl ClipboardMonitor {
     pub async fn run(&self) {
         if self.inner.helper.is_none() && !is_kde_session() {
             tracing::info!("no selection source: no selection helper configured");
+            self.inner.status.set(SelectionInput::Unavailable);
             return;
         }
         self.run_with_retry(|| self.watch_selection()).await;
@@ -167,80 +312,196 @@ impl ClipboardMonitor {
 
     async fn watch_selection(&self) -> bool {
         if let Some(helper) = self.inner.helper.clone() {
-            let started = Instant::now();
-            let watched = self
-                .watch_frames(Command::new(helper).arg("--selection-helper"))
+            let outcome = self
+                .watch_frames(
+                    Command::new(&helper).arg("--selection-helper"),
+                    SelectionSource::Primary,
+                    Some(SelectionInput::Primary),
+                )
                 .await;
-            if watched || !self.running() {
-                return watched;
+            match outcome {
+                HelperOutcome::Stopped => return true,
+                HelperOutcome::Ended {
+                    code: Some(EXIT_PRIMARY_UNSUPPORTED),
+                    ..
+                } => {
+                    self.watch_without_primary(&helper).await;
+                    return true;
+                }
+                // A helper that ran for a while worked on this desktop and
+                // only lost its connection (suspend, compositor hiccup):
+                // restart it. Klipper sees text selections only with matching
+                // Klipper settings, so it is the fallback for desktops without
+                // data-control support only.
+                HelperOutcome::Ended { ran_for, .. } if ran_for >= HELPER_STARTUP_GRACE => return true,
+                HelperOutcome::Ended { .. } => {
+                    tracing::warn!("selection helper failed right after start; falling back to Klipper")
+                }
             }
-            // A helper that ran for a while worked on this desktop and only
-            // lost its connection (suspend, compositor hiccup): restart it.
-            // Klipper sees text selections only with matching Klipper
-            // settings, so it is the fallback for desktops without
-            // data-control support only.
-            if started.elapsed() >= HELPER_STARTUP_GRACE {
-                return true;
-            }
-            tracing::warn!("selection helper failed right after start; falling back to Klipper");
         }
         if is_kde_session() {
             tracing::info!("watching selections through Klipper");
+            self.inner.status.set(SelectionInput::Klipper);
             return self.watch_klipper().await;
         }
+        self.inner.status.set(SelectionInput::Unavailable);
         false
     }
 
-    /// Read NUL-terminated frames from a child; `false` when the child ends or misbehaves.
-    async fn watch_frames(&self, command: &mut Command) -> bool {
+    /// The compositor offers no PRIMARY: AT-SPI plus clipboard until the
+    /// clipboard helper reports that PRIMARY is back (or the monitor stops).
+    async fn watch_without_primary(&self, helper: &Path) {
+        tracing::info!(
+            "the compositor offers no PRIMARY selection (KDE: middle-click paste is off); \
+             using AT-SPI with the clipboard as fallback"
+        );
+        self.inner.status.set(SelectionInput::Clipboard);
+        let accessibility = self.start_accessibility();
+
+        let mut delay = Duration::from_secs(1);
+        while self.running() {
+            let outcome = self
+                .watch_frames(
+                    Command::new(helper).args(["--selection-helper", "--clipboard"]),
+                    SelectionSource::Clipboard,
+                    None,
+                )
+                .await;
+            match outcome {
+                HelperOutcome::Stopped => break,
+                HelperOutcome::Ended {
+                    code: Some(EXIT_PRIMARY_AVAILABLE),
+                    ..
+                } => {
+                    tracing::info!("the compositor offers the PRIMARY selection again; switching back");
+                    break;
+                }
+                HelperOutcome::Ended { ran_for, .. } => {
+                    if ran_for >= HELPER_STARTUP_GRACE {
+                        delay = Duration::from_secs(1);
+                    }
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                }
+            }
+        }
+        drop(accessibility);
+        #[cfg(target_os = "linux")]
+        if self.inner.accessibility {
+            self.inner.flag.restore().await;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start_accessibility(&self) -> Option<AbortOnDrop> {
+        if !self.inner.accessibility {
+            tracing::info!("AT-SPI selections disabled (OPENREADER_ATSPI=0)");
+            return None;
+        }
+        let status = self.inner.status.clone();
+        let connected = Arc::new(move |connected: bool| {
+            status.set(if connected {
+                SelectionInput::Accessibility
+            } else {
+                SelectionInput::Clipboard
+            })
+        });
+        let task = tokio::spawn(selection_atspi::run_source(
+            Arc::new(self.clone()),
+            self.inner.debounce,
+            self.inner.flag.clone(),
+            connected,
+        ));
+        Some(AbortOnDrop(task))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn start_accessibility(&self) -> Option<AbortOnDrop> {
+        None
+    }
+
+    /// Read NUL-terminated frames from a child until it ends or misbehaves.
+    /// `input` is reported as active source once the child survived its start.
+    pub async fn watch_frames(
+        &self,
+        command: &mut Command,
+        source: SelectionSource,
+        input: Option<SelectionInput>,
+    ) -> HelperOutcome {
         command
             // The helper exits when this pipe closes, i.e. when we go away.
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        let started = Instant::now();
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 tracing::warn!("selection helper could not be started: {error}");
-                return false;
+                return HelperOutcome::Ended {
+                    code: None,
+                    ran_for: started.elapsed(),
+                };
             }
         };
-        tracing::info!("selection helper started (pid {:?})", child.id());
+        tracing::info!("selection helper started ({source:?}, pid {:?})", child.id());
         let _stdin = child.stdin.take();
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(log_helper_stderr(stderr));
         }
         let Some(mut stdout) = child.stdout.take() else {
-            return false;
+            return HelperOutcome::Ended {
+                code: None,
+                ran_for: started.elapsed(),
+            };
         };
 
+        let survived = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(survived);
+        let mut reported = input.is_none();
         let mut buffer: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; 64 * 1024];
-        let result = loop {
+        let stopped = loop {
             if !self.running() {
                 break true;
             }
             if let Some(end) = buffer.iter().position(|byte| *byte == 0) {
                 let frame: Vec<u8> = buffer.drain(..=end).collect();
                 let text = normalize_selection(&String::from_utf8_lossy(&frame[..frame.len() - 1]));
-                self.schedule_candidate(text, SelectionSource::Primary, true);
+                self.schedule_candidate(text, source, source == SelectionSource::Primary);
                 continue;
             }
             if buffer.len() > MAX_FRAME_BYTES {
                 break false;
             }
-            match stdout.read(&mut chunk).await {
-                Ok(0) | Err(_) => break false,
-                Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+            tokio::select! {
+                read = stdout.read(&mut chunk) => match read {
+                    Ok(0) | Err(_) => break false,
+                    Ok(count) => buffer.extend_from_slice(&chunk[..count]),
+                },
+                _ = &mut survived, if !reported => {
+                    reported = true;
+                    if let Some(input) = input {
+                        self.inner.status.set(input);
+                    }
+                }
             }
         };
         terminate_child(&mut child, Duration::from_millis(400)).await;
-        if !result {
-            let status = child.try_wait().ok().flatten();
-            tracing::warn!("selection helper ended ({status:?}); restarting");
+        if stopped {
+            return HelperOutcome::Stopped;
         }
-        result
+        let status = child.try_wait().ok().flatten();
+        let code = status.and_then(|status| status.code());
+        match code {
+            Some(EXIT_PRIMARY_UNSUPPORTED) | Some(EXIT_PRIMARY_AVAILABLE) => {}
+            _ => tracing::warn!("selection helper ended ({status:?}); restarting"),
+        }
+        HelperOutcome::Ended {
+            code,
+            ran_for: started.elapsed(),
+        }
     }
 
     async fn watch_klipper(&self) -> bool {
@@ -314,12 +575,43 @@ impl ClipboardMonitor {
         let inner = self.inner.clone();
         state.pending = Some(tokio::spawn(async move {
             tokio::time::sleep(inner.debounce).await;
-            if inner.state.lock().unwrap().observed_text != text {
-                return;
+            {
+                let mut state = inner.state.lock().unwrap();
+                if state.observed_text != text {
+                    return;
+                }
+                if !state.recent.admit(&text, source, Instant::now()) {
+                    state.last_text = text;
+                    return;
+                }
             }
             inner.sink.publish(text.clone(), source).await;
             inner.state.lock().unwrap().last_text = text;
         }));
+    }
+
+    /// An AT-SPI selection (already debounced by the AT-SPI source).
+    pub fn offer_accessible(&self, text: &str) {
+        let text = normalize_selection(text);
+        if text.is_empty() {
+            return;
+        }
+        {
+            let mut state = self.inner.state.lock().unwrap();
+            if text == state.accessible_text {
+                return;
+            }
+            state.accessible_text = text.clone();
+            if !state.recent.admit(&text, SelectionSource::Accessibility, Instant::now()) {
+                return;
+            }
+        }
+        let inner = self.inner.clone();
+        tokio::spawn(async move { inner.sink.publish(text, SelectionSource::Accessibility).await });
+    }
+
+    pub fn clear_accessible(&self) {
+        self.inner.state.lock().unwrap().accessible_text.clear();
     }
 
     fn cancel_pending(&self) {
@@ -327,6 +619,21 @@ impl ClipboardMonitor {
             pending.abort();
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+impl SelectionReceiver for ClipboardMonitor {
+    fn accessible_selection(&self, text: String) {
+        self.offer_accessible(&text);
+    }
+
+    fn accessible_selection_cleared(&self) {
+        self.clear_accessible();
+    }
+}
+
+fn accessibility_from_env() -> bool {
+    std::env::var("OPENREADER_ATSPI").map_or(true, |value| value.trim() != "0")
 }
 
 pub fn is_kde_session() -> bool {
@@ -354,6 +661,13 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exit_codes_match_the_helper() {
+        assert_eq!(EXIT_PRIMARY_UNSUPPORTED, crate::selection_wayland::EXIT_PRIMARY_UNSUPPORTED);
+        assert_eq!(EXIT_PRIMARY_AVAILABLE, crate::selection_wayland::EXIT_PRIMARY_AVAILABLE);
+    }
+
     struct FakeKlipper {
         calls: AtomicUsize,
     }
@@ -368,26 +682,39 @@ mod tests {
 
     struct Capture {
         published: Mutex<Vec<String>>,
+        sources: Mutex<Vec<SelectionSource>>,
         monitor: Mutex<Option<ClipboardMonitor>>,
+    }
+
+    impl Capture {
+        fn new() -> Arc<Self> {
+            Arc::new(Capture {
+                published: Mutex::new(Vec::new()),
+                sources: Mutex::new(Vec::new()),
+                monitor: Mutex::new(None),
+            })
+        }
     }
 
     #[async_trait]
     impl SelectionSink for Capture {
-        async fn publish(&self, text: String, _source: SelectionSource) {
+        async fn publish(&self, text: String, source: SelectionSource) {
             self.published.lock().unwrap().push(text);
+            self.sources.lock().unwrap().push(source);
             if let Some(monitor) = self.monitor.lock().unwrap().as_ref() {
                 monitor.inner.running.store(false, Ordering::SeqCst);
             }
         }
     }
 
+    fn monitor(capture: &Arc<Capture>, debounce: Duration, helper: Option<PathBuf>) -> ClipboardMonitor {
+        ClipboardMonitor::with_debounce(capture.clone(), debounce, helper).without_accessibility()
+    }
+
     #[tokio::test]
     async fn klipper_content_change_without_history_signal() {
-        let capture = Arc::new(Capture {
-            published: Mutex::new(Vec::new()),
-            monitor: Mutex::new(None),
-        });
-        let monitor = ClipboardMonitor::with_debounce(capture.clone(), Duration::ZERO, None);
+        let capture = Capture::new();
+        let monitor = monitor(&capture, Duration::ZERO, None);
         *capture.monitor.lock().unwrap() = Some(monitor.clone());
         let source = FakeKlipper {
             calls: AtomicUsize::new(0),
@@ -405,30 +732,27 @@ mod tests {
 
     #[tokio::test]
     async fn native_helper_frames_are_debounced_and_published() {
-        let capture = Arc::new(Capture {
-            published: Mutex::new(Vec::new()),
-            monitor: Mutex::new(None),
-        });
-        let monitor = ClipboardMonitor::with_debounce(capture.clone(), Duration::from_millis(50), None);
+        let capture = Capture::new();
+        let monitor = monitor(&capture, Duration::from_millis(50), None);
         let mut command = Command::new("sh");
         // Two quick frames (only the last survives the debounce), then a later one.
         command.args([
             "-c",
             "printf 'erst\\000zweiter &amp; Text\\000'; sleep 0.3; printf 'dritter\\000'; sleep 0.3",
         ]);
-        let watched = monitor.watch_frames(&mut command).await;
-        assert!(!watched, "EOF ends the watch so it can be retried");
+        let outcome = monitor.watch_frames(&mut command, SelectionSource::Primary, None).await;
+        assert!(
+            matches!(outcome, HelperOutcome::Ended { code: Some(0), .. }),
+            "EOF ends the watch so it can be retried: {outcome:?}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(*capture.published.lock().unwrap(), ["zweiter & Text", "dritter"]);
     }
 
     #[tokio::test]
     async fn empty_selection_resets_candidate() {
-        let capture = Arc::new(Capture {
-            published: Mutex::new(Vec::new()),
-            monitor: Mutex::new(None),
-        });
-        let monitor = ClipboardMonitor::with_debounce(capture.clone(), Duration::from_millis(30), None);
+        let capture = Capture::new();
+        let monitor = monitor(&capture, Duration::from_millis(30), None);
         monitor.schedule_candidate("Text".into(), SelectionSource::Primary, false);
         monitor.schedule_candidate(String::new(), SelectionSource::Primary, false);
         tokio::time::sleep(Duration::from_millis(80)).await;
@@ -439,5 +763,118 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         // Duplicates are suppressed unless explicitly allowed.
         assert_eq!(*capture.published.lock().unwrap(), ["Text"]);
+    }
+
+    #[test]
+    fn recent_selections_dedupe_across_sources_only() {
+        let start = Instant::now();
+        let mut recent = RecentSelections::default();
+        assert!(recent.admit("Ein Satz", SelectionSource::Accessibility, start));
+        // Ctrl+C on the same selection a moment later: offered already.
+        assert!(!recent.admit("Ein Satz", SelectionSource::Clipboard, start + Duration::from_secs(2)));
+        // The same source may offer it again (its own duplicate rules apply).
+        assert!(recent.admit("Ein Satz", SelectionSource::Accessibility, start + Duration::from_secs(3)));
+        // Other text, or after the window: offered.
+        assert!(recent.admit("Anderer Satz", SelectionSource::Clipboard, start + Duration::from_secs(4)));
+        assert!(recent.admit(
+            "Ein Satz",
+            SelectionSource::Clipboard,
+            start + Duration::from_secs(3) + DEDUPE_WINDOW
+        ));
+    }
+
+    #[tokio::test]
+    async fn accessible_and_clipboard_selection_of_the_same_text_fire_once() {
+        let capture = Capture::new();
+        let monitor = monitor(&capture, Duration::from_millis(20), None);
+        monitor.offer_accessible("Markierter  Text");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Same selection reported again (focus change): not offered twice.
+        monitor.offer_accessible("Markierter Text");
+        // The user presses Ctrl+C on it.
+        monitor.schedule_candidate("Markierter Text".into(), SelectionSource::Clipboard, true);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(*capture.published.lock().unwrap(), ["Markierter Text"]);
+        assert_eq!(*capture.sources.lock().unwrap(), [SelectionSource::Accessibility]);
+
+        // After the selection was cleared, selecting it again is offered again.
+        monitor.clear_accessible();
+        monitor.offer_accessible("Markierter Text");
+        // A different copied text goes through.
+        monitor.schedule_candidate("Kopiert".into(), SelectionSource::Clipboard, true);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(*capture.published.lock().unwrap(), ["Markierter Text", "Markierter Text", "Kopiert"]);
+    }
+
+    fn fake_helper(directory: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join("helper.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn switches_to_clipboard_without_primary_and_back() {
+        let directory = tempfile::tempdir().unwrap();
+        // PRIMARY unsupported; the clipboard watcher reports one copy, then
+        // that PRIMARY is available again.
+        let helper = fake_helper(
+            directory.path(),
+            r#"case "$*" in
+  *--clipboard*) printf 'Kopierter Text\000'; sleep 0.3; exit 4 ;;
+  *) exit 3 ;;
+esac"#,
+        );
+        let capture = Capture::new();
+        let status = SelectionStatus::default();
+        let monitor = ClipboardMonitor::with_debounce(capture.clone(), Duration::from_millis(30), Some(helper))
+            .without_accessibility()
+            .with_status(status.clone());
+        let watched = tokio::time::timeout(Duration::from_secs(5), monitor.watch_selection())
+            .await
+            .unwrap();
+        assert!(watched);
+        assert_eq!(*capture.published.lock().unwrap(), ["Kopierter Text"]);
+        assert_eq!(*capture.sources.lock().unwrap(), [SelectionSource::Clipboard]);
+        assert_eq!(status.get(), Some(SelectionInput::Clipboard));
+    }
+
+    #[tokio::test]
+    async fn working_primary_helper_is_reported_as_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let helper = fake_helper(directory.path(), "sleep 1.3; printf 'Auswahl\\000'; sleep 0.2");
+        let capture = Capture::new();
+        let status = SelectionStatus::default();
+        let monitor = ClipboardMonitor::with_debounce(capture.clone(), Duration::from_millis(30), Some(helper))
+            .without_accessibility()
+            .with_status(status.clone());
+        let mut command = Command::new(monitor.inner.helper.clone().unwrap());
+        let outcome = monitor
+            .watch_frames(&mut command, SelectionSource::Primary, Some(SelectionInput::Primary))
+            .await;
+        assert!(matches!(outcome, HelperOutcome::Ended { code: Some(0), .. }));
+        assert_eq!(status.get(), Some(SelectionInput::Primary));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(*capture.published.lock().unwrap(), ["Auswahl"]);
+    }
+
+    #[tokio::test]
+    async fn primary_helper_exit_code_is_reported() {
+        let capture = Capture::new();
+        let monitor = monitor(&capture, Duration::from_millis(30), None);
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        let outcome = monitor
+            .watch_frames(&mut command, SelectionSource::Primary, Some(SelectionInput::Primary))
+            .await;
+        assert!(matches!(
+            outcome,
+            HelperOutcome::Ended {
+                code: Some(EXIT_PRIMARY_UNSUPPORTED),
+                ..
+            }
+        ));
+        assert_eq!(monitor.status().get(), None, "a helper that exits at once is not reported");
     }
 }
