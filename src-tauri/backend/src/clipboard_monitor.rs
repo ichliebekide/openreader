@@ -83,6 +83,14 @@ pub struct GuardedPublisher {
 /// with the bubble following the pointer.
 const RECLAIM_WINDOW: Duration = Duration::from_secs(3);
 
+/// Something else may fill the emptied PRIMARY at once with an older text,
+/// e.g. Klipper's "prevent empty clipboard" restoring its last entry. Any
+/// PRIMARY change this soon after clearing is such a restore, not a user
+/// selection (with the debounce, a real new selection cannot arrive sooner
+/// than ~0.55 s anyway, and nobody selects again that fast after the bubble
+/// appeared).
+const RESTORE_WINDOW: Duration = Duration::from_millis(1200);
+
 impl GuardedPublisher {
     pub fn new(hub: Arc<EventHub>, context: DesktopContext, guard: Arc<SelectionGuard>) -> Self {
         Self {
@@ -94,12 +102,15 @@ impl GuardedPublisher {
         }
     }
 
-    /// `true` when `text` is an application re-claiming the PRIMARY
-    /// selection that was cleared moments ago.
+    /// `true` when `text` is not a new user selection but PRIMARY being
+    /// refilled after we cleared it: the application re-claiming the same
+    /// text, or anything at all right after the clear (Klipper restoring an
+    /// older entry).
     fn is_reclaim(&self, text: &str) -> bool {
         let last = self.last_cleared.lock().unwrap();
-        last.as_ref()
-            .is_some_and(|(cleared, at)| cleared == text && at.elapsed() < RECLAIM_WINDOW)
+        last.as_ref().is_some_and(|(cleared, at)| {
+            at.elapsed() < RESTORE_WINDOW || (cleared == text && at.elapsed() < RECLAIM_WINDOW)
+        })
     }
 }
 
@@ -111,7 +122,7 @@ impl SelectionSink for GuardedPublisher {
             // Leave the selection to the application; clearing again would
             // only repeat the cycle.
             tracing::info!(
-                "primary selection re-claimed by the application ({} chars); not offering it again",
+                "primary selection refilled after clearing ({} chars, re-claim or clipboard manager); not offering it",
                 char_len(&text)
             );
             return;
@@ -777,6 +788,18 @@ mod tests {
         let quiet = tokio::time::timeout(Duration::from_millis(50), events.next()).await;
         assert!(quiet.is_err(), "re-claim was offered again");
         assert_eq!(FAKE_CLEARS.load(Ordering::SeqCst), 1);
+
+        // Klipper restoring an older, different entry right after the clear.
+        publisher.publish("Alter Eintrag aus Klipper".to_string(), SelectionSource::Primary).await;
+        let quiet = tokio::time::timeout(Duration::from_millis(50), events.next()).await;
+        assert!(quiet.is_err(), "restored clipboard entry was offered");
+        assert_eq!(FAKE_CLEARS.load(Ordering::SeqCst), 1);
+
+        // A different selection after the restore window is a new selection.
+        let earlier = Instant::now().checked_sub(RESTORE_WINDOW * 2).unwrap();
+        *publisher.last_cleared.lock().unwrap() = Some((text.clone(), earlier));
+        publisher.publish("Ein anderer Satz.".to_string(), SelectionSource::Primary).await;
+        assert!(matches!(events.next().await, ReaderEvent::Selection(_)));
 
         // Selecting the same text again later is a new selection.
         let earlier = Instant::now().checked_sub(RECLAIM_WINDOW * 2).unwrap();

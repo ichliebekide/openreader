@@ -151,6 +151,10 @@ Andere setzen ihre noch aktive Markierung sofort wieder als PRIMARY. Diesen
 Text bietet OpenReader innerhalb von 3 s nicht erneut an und leert ihn auch
 nicht noch einmal (sonst entsteht eine Schleife, bei der die Blase dem Zeiger
 folgt); in solchen Programmen bleibt Mittelklick-Einfuegen also moeglich.
+Ebenso fuellt Klipper mit der Option "Leere Zwischenablage verhindern" die
+geleerte Auswahl sofort mit seinem letzten Eintrag. Jede PRIMARY-Aenderung
+innerhalb von 1,2 s nach dem Leeren gilt deshalb als Wiederherstellung und wird
+nicht angeboten; ein Mittelklick fuegt dann diesen Klipper-Eintrag ein.
 
 Ein neuer Vorlese-Auftrag waehrend einer laufenden Wiedergabe ersetzt diese
 (wie bei MWS Reader); derselbe Text erneut laesst sie weiterlaufen.
