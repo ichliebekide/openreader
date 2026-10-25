@@ -147,6 +147,10 @@ Ein versehentlicher Mittelklick fuegt dann nichts ein, ohne dass man
 Mittelklick-Einfuegen in KDE abschalten muss (was PRIMARY ganz entfernt). Abgelehnte
 Auswahlen (z. B. in Terminals) bleiben unangetastet. Manche Programme, etwa
 Konsole, heben ihre sichtbare Markierung auf, sobald sie die Auswahl verlieren.
+Andere setzen ihre noch aktive Markierung sofort wieder als PRIMARY. Diesen
+Text bietet OpenReader innerhalb von 3 s nicht erneut an und leert ihn auch
+nicht noch einmal (sonst entsteht eine Schleife, bei der die Blase dem Zeiger
+folgt); in solchen Programmen bleibt Mittelklick-Einfuegen also moeglich.
 
 Ein neuer Vorlese-Auftrag waehrend einer laufenden Wiedergabe ersetzt diese
 (wie bei MWS Reader); derselbe Text erneut laesst sie weiterlaufen.

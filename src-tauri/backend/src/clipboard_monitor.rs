@@ -72,11 +72,50 @@ pub struct GuardedPublisher {
     pub hub: Arc<EventHub>,
     pub context: DesktopContext,
     pub guard: Arc<SelectionGuard>,
+    /// Text whose PRIMARY selection we cleared last, and when.
+    last_cleared: Mutex<Option<(String, Instant)>>,
+    clear_primary: fn(),
+}
+
+/// Many applications claim PRIMARY again right after losing it while their
+/// text is still selected. Such a re-claim of the text we just cleared is
+/// not a new selection: offering it again (and clearing again) would loop,
+/// with the bubble following the pointer.
+const RECLAIM_WINDOW: Duration = Duration::from_secs(3);
+
+impl GuardedPublisher {
+    pub fn new(hub: Arc<EventHub>, context: DesktopContext, guard: Arc<SelectionGuard>) -> Self {
+        Self {
+            hub,
+            context,
+            guard,
+            last_cleared: Mutex::new(None),
+            clear_primary: clear_primary_selection,
+        }
+    }
+
+    /// `true` when `text` is an application re-claiming the PRIMARY
+    /// selection that was cleared moments ago.
+    fn is_reclaim(&self, text: &str) -> bool {
+        let last = self.last_cleared.lock().unwrap();
+        last.as_ref()
+            .is_some_and(|(cleared, at)| cleared == text && at.elapsed() < RECLAIM_WINDOW)
+    }
 }
 
 #[async_trait]
 impl SelectionSink for GuardedPublisher {
     async fn publish(&self, text: String, source: SelectionSource) {
+        let clearing = source == SelectionSource::Primary && self.guard.clears_primary_after_capture();
+        if clearing && self.is_reclaim(&text) {
+            // Leave the selection to the application; clearing again would
+            // only repeat the cycle.
+            tracing::info!(
+                "primary selection re-claimed by the application ({} chars); not offering it again",
+                char_len(&text)
+            );
+            return;
+        }
         let snapshot = self.context.snapshot();
         if let Err(reason) = self.guard.check(&text, &snapshot) {
             tracing::info!(
@@ -87,6 +126,7 @@ impl SelectionSink for GuardedPublisher {
             return;
         }
         tracing::info!("selection published ({} chars via {source:?})", char_len(&text));
+        let text_for_clear = if clearing { text.clone() } else { String::new() };
         self.hub.publish(ReaderEvent::Selection(SelectionEvent {
             kind: "selection",
             text_preview: preview(&text, DEFAULT_PREVIEW_CHARS),
@@ -98,8 +138,9 @@ impl SelectionSink for GuardedPublisher {
             active_app: snapshot.active_resource_class,
             created_at: Utc::now(),
         }));
-        if source == SelectionSource::Primary && self.guard.clears_primary_after_capture() {
-            tokio::task::spawn_blocking(clear_primary_selection);
+        if clearing {
+            *self.last_cleared.lock().unwrap() = Some((text_for_clear, Instant::now()));
+            tokio::task::spawn_blocking(self.clear_primary);
         }
     }
 }
@@ -700,6 +741,49 @@ pub async fn terminate_child(child: &mut tokio::process::Child, grace: Duration)
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    static FAKE_CLEARS: AtomicUsize = AtomicUsize::new(0);
+
+    fn fake_clear() {
+        FAKE_CLEARS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn reclaimed_primary_is_not_offered_again_after_clearing() {
+        let mut settings = crate::models::ReaderSettings::default();
+        settings.clear_primary_after_capture = true;
+        let hub = Arc::new(EventHub::new());
+        let mut events = hub.subscribe();
+        let mut publisher = GuardedPublisher::new(
+            hub.clone(),
+            DesktopContext::new(),
+            Arc::new(SelectionGuard::new(settings)),
+        );
+        publisher.clear_primary = fake_clear;
+        let text = "Ein markierter Satz zum Vorlesen.".to_string();
+
+        publisher.publish(text.clone(), SelectionSource::Primary).await;
+        assert!(matches!(events.next().await, ReaderEvent::Selection(_)));
+        for _ in 0..100 {
+            if FAKE_CLEARS.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(FAKE_CLEARS.load(Ordering::SeqCst), 1);
+
+        // The application claims the same text again right away: no bubble, no second clear.
+        publisher.publish(text.clone(), SelectionSource::Primary).await;
+        let quiet = tokio::time::timeout(Duration::from_millis(50), events.next()).await;
+        assert!(quiet.is_err(), "re-claim was offered again");
+        assert_eq!(FAKE_CLEARS.load(Ordering::SeqCst), 1);
+
+        // Selecting the same text again later is a new selection.
+        let earlier = Instant::now().checked_sub(RECLAIM_WINDOW * 2).unwrap();
+        *publisher.last_cleared.lock().unwrap() = Some((text.clone(), earlier));
+        publisher.publish(text, SelectionSource::Primary).await;
+        assert!(matches!(events.next().await, ReaderEvent::Selection(_)));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

@@ -611,11 +611,7 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
     let app = ReaderApp::new(SettingsStore::new(config.settings_path.clone()), default_speech_factory());
     let settings = app.settings();
     let monitor = ClipboardMonitor::new(
-        Arc::new(GuardedPublisher {
-            hub: app.hub.clone(),
-            context: app.desktop.clone(),
-            guard: app.guard.clone(),
-        }),
+        Arc::new(GuardedPublisher::new(app.hub.clone(), app.desktop.clone(), app.guard.clone())),
         settings.selection_debounce_ms,
         config.selection_helper.clone(),
     )
