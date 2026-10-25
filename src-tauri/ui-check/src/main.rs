@@ -6,6 +6,7 @@
 //! cargo run -p openreader-ui-check              # run the check (screenshots to a temp dir)
 //! cargo run -p openreader-ui-check -- --screenshots ../docs/screenshots
 //! cargo run -p openreader-ui-check -- --serve 18765   # preview server for a browser
+//! cargo run -p openreader-ui-check -- --readme ../docs/screenshots   # README pictures
 //! ```
 //!
 //! Options: `--dist <dir>` (default `../dist` from `src-tauri`), `--chrome <path>`
@@ -25,6 +26,7 @@ pub struct Options {
     pub chrome: Option<PathBuf>,
     pub port: u16,
     pub serve: bool,
+    pub readme: Option<PathBuf>,
 }
 
 fn parse_options() -> Result<Options> {
@@ -34,6 +36,7 @@ fn parse_options() -> Result<Options> {
         chrome: std::env::var_os("OPENREADER_CHROMIUM").map(PathBuf::from),
         port: 0,
         serve: false,
+        readme: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
@@ -42,6 +45,7 @@ fn parse_options() -> Result<Options> {
             "--dist" => options.dist = value("--dist")?.into(),
             "--screenshots" => options.screenshots = Some(value("--screenshots")?.into()),
             "--chrome" => options.chrome = Some(value("--chrome")?.into()),
+            "--readme" => options.readme = Some(value("--readme")?.into()),
             "--port" => options.port = value("--port")?.parse()?,
             "--serve" => {
                 options.serve = true;
@@ -49,7 +53,7 @@ fn parse_options() -> Result<Options> {
             }
             "-h" | "--help" => {
                 println!(
-                    "openreader-ui-check [--dist DIR] [--screenshots DIR] [--chrome PATH] [--port N] [--serve PORT]"
+                    "openreader-ui-check [--dist DIR] [--screenshots DIR] [--readme DIR] [--chrome PATH] [--port N] [--serve PORT]"
                 );
                 std::process::exit(0);
             }
@@ -82,6 +86,15 @@ fn main() -> Result<()> {
         );
         println!("Fallback:   curl -X POST {}/__fixture/fallback-next", fixture.base());
         runtime.block_on(tokio::signal::ctrl_c())?;
+        return Ok(());
+    }
+
+    if let Some(dir) = &options.readme {
+        std::fs::create_dir_all(dir)?;
+        let result = check::readme(&fixture, options.chrome.as_deref(), dir);
+        runtime.block_on(fixture.app.stop_speech());
+        result?;
+        println!("README screenshots: {}", dir.display());
         return Ok(());
     }
 

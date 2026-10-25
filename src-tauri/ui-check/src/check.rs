@@ -544,3 +544,62 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     );
     Ok(())
 }
+
+/// Sample text for the README screenshots.
+const README_TEXT: &str = "OpenReader liest markierten Text aus jeder Anwendung vor. Einfach Text \
+markieren, auf die Blase klicken, und Seraphina, Piper oder eine andere Stimme liest ihn vor. Das gerade \
+gesprochene Wort wird hervorgehoben, damit man beim Zuhören mitlesen kann. Die App läuft nativ unter Linux \
+mit KDE Plasma und Wayland, ist komplett in Rust geschrieben und liest auch PDF- und EPUB-Dateien. Sie ist \
+als freie Alternative zu Vorleseprogrammen unter Windows entstanden: für alle, die im Alltag auf eine \
+Vorlesefunktion angewiesen sind und trotzdem auf Linux umsteigen möchten.";
+
+/// Screenshots for the README (`--readme DIR`): reading view and settings in
+/// light and dark, plus the overlay bubble.
+pub fn readme(fixture: &Fixture, chrome: Option<&Path>, out: &Path) -> Result<()> {
+    let browser = launch(chrome)?;
+    let tab = browser.new_tab()?;
+    tab.set_default_timeout(Duration::from_secs(10));
+    let page = Page2 { tab, screenshots: out };
+    page.viewport(1200, 620)?;
+    fixture.switches.piper_ready.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    for scheme in ["light", "dark"] {
+        page.color_scheme(scheme)?;
+        page.goto("about:blank")?;
+        page.goto(&fixture.page_url(""))?;
+        page.wait("settings", "document.querySelectorAll('.status-row').length === 2")?;
+        fixture.select(README_TEXT);
+        page.wait("selection", "document.querySelector('.reading-text .empty-state') === null")?;
+
+        // Read up to a word in the middle, then pause to freeze the picture.
+        page.click("button[aria-label='Vorlesen']")?;
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while page.text("document.querySelector('mark.spoken-word')?.textContent || ''")? != "hervorgehoben," {
+            ensure!(Instant::now() < deadline, "reading did not reach the target word");
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        page.click("button[aria-label='Pausieren']")?;
+        page.wait("paused", "document.querySelector(\"button[aria-label='Fortsetzen']\")")?;
+        page.screenshot(&format!("readme-reading-{scheme}"))?;
+
+        page.click("button[aria-label='Stoppen']")?;
+        page.wait("stopped", "document.querySelector(\"button[aria-label='Vorlesen']\")")?;
+        page.click("button[aria-label='Einstellungen']")?;
+        page.wait("drawer", "document.querySelector('.drawer.open')")?;
+        page.wait("status", "[...document.querySelectorAll('.status-detail')].every(d => d.textContent === 'bereit')")?;
+        page.screenshot(&format!("readme-settings-{scheme}"))?;
+        page.tab.press_key("Escape")?;
+    }
+
+    // The bubble on a desktop-like background, cropped and at 2x.
+    page.color_scheme("dark")?;
+    page.goto("about:blank")?;
+    page.goto(&fixture.page_url("#/overlay"))?;
+    page.wait("overlay", "document.querySelector('.overlay-bubble')")?;
+    page.eval(
+        "document.querySelector('.overlay-bubble').classList.remove('hidden'),
+         document.body.style.background = 'linear-gradient(135deg, #3b4a5a, #8a7a66)', true",
+    )?;
+    page.screenshot_clip("readme-bubble", 0.0, 0.0, 72.0, 72.0, 3.0)?;
+    Ok(())
+}

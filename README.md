@@ -1,6 +1,26 @@
-# OpenReader
+# <img src="src-tauri/icons/icon.png" alt="" width="40" align="top"> OpenReader
 
 OpenReader ist ein Wayland-first Linux-Reader als moderne Alternative zu MWS Reader: Text markieren, kleines rundes Speaker-Overlay anklicken, mit Piper lokal oder mit Microsoft Seraphina online vorlesen lassen.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-reading-dark.png">
+  <img alt="OpenReader liest einen markierten Text vor; das gerade gesprochene Wort ist hervorgehoben." src="docs/screenshots/readme-reading-light.png">
+</picture>
+
+<table>
+  <tr>
+    <td width="70%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-settings-dark.png">
+        <img alt="Einstellungen mit Stimme, Wiedergabe und Auswahl" src="docs/screenshots/readme-settings-light.png">
+      </picture>
+    </td>
+    <td width="30%" align="center">
+      <img alt="Die runde Vorlese-Blase erscheint neben dem markierten Text" src="docs/screenshots/readme-bubble.png" width="120"><br>
+      <sub>Die Vorlese-Blase erscheint neben markiertem Text in jeder Anwendung.</sub>
+    </td>
+  </tr>
+</table>
 
 Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Windows- oder X11-only Hooks und nutzt stattdessen:
 

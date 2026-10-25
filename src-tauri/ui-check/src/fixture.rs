@@ -30,6 +30,8 @@ pub const WORD_INTERVAL: Duration = Duration::from_millis(380);
 pub struct Switches {
     /// The next request reports a Seraphina -> Piper fallback first.
     pub fallback_next: AtomicBool,
+    /// Report Piper as installed (README screenshots).
+    pub piper_ready: AtomicBool,
 }
 
 struct SilentSpeech {
@@ -138,11 +140,20 @@ impl Speech for SilentSpeech {
                     configured: true,
                     detail: "Microsoft Seraphina (Fixture)".into(),
                 },
-                TtsEngineStatus {
-                    engine: TtsEngine::Piper,
-                    available: false,
-                    configured: true,
-                    detail: "Stimmmodell nicht installiert".into(),
+                if self.switches.piper_ready.load(Ordering::SeqCst) {
+                    TtsEngineStatus {
+                        engine: TtsEngine::Piper,
+                        available: true,
+                        configured: true,
+                        detail: "de_DE-thorsten-medium".into(),
+                    }
+                } else {
+                    TtsEngineStatus {
+                        engine: TtsEngine::Piper,
+                        available: false,
+                        configured: true,
+                        detail: "Stimmmodell nicht installiert".into(),
+                    }
                 },
             ],
             fallback_order: vec![TtsEngine::Edge, TtsEngine::Piper],
