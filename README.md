@@ -170,4 +170,3 @@ Die beweglichen Plattformdetails wurden gegen offizielle oder primäre Quellen a
 
 - Behobene Fehler und Verifikation: [docs/FIX.md](docs/FIX.md)
 - Technische Entscheidungen und Betriebswissen: [docs/NOTES.md](docs/NOTES.md)
-- MWS-Analyse und unabhaengige Verbesserungen: [docs/MWS_READER_ANALYSIS.md](docs/MWS_READER_ANALYSIS.md)
