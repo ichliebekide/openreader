@@ -486,6 +486,13 @@ impl ClipboardMonitor {
                     if let Some(input) = input {
                         self.inner.status.set(input);
                     }
+                    // PRIMARY works: undo an accessibility switch left on by
+                    // an earlier run that was killed (no-op otherwise).
+                    #[cfg(target_os = "linux")]
+                    if input == Some(SelectionInput::Primary) && self.inner.accessibility {
+                        let flag = self.inner.flag.clone();
+                        tokio::spawn(async move { flag.restore().await });
+                    }
                 }
             }
         };

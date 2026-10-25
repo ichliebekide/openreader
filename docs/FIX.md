@@ -4,6 +4,35 @@ Diese Datei dokumentiert reproduzierbare Fehler, ihre Ursache, die umgesetzte
 Loesung und die Verifikation. Neue Fehlerbehebungen werden ab jetzt hier
 chronologisch ergaenzt.
 
+## 2026-10-25 - Keine Blase bei abgeschaltetem Mittelklick-Einfuegen
+
+- Symptom: Mit KDEs Option "Mittelklick fuegt markierten Text ein" aus
+  (`kwinrc [Wayland] EnablePrimarySelection=false`) erschien bei Markierungen
+  nie die Vorlese-Blase.
+- Ursache: KWin bietet dann kein `zwp_primary_selection_device_manager_v1`
+  mehr an; Programme koennen kein PRIMARY setzen. `ext-data-control-v1`
+  akzeptierte den PRIMARY-Beobachter des Helpers trotzdem, der deshalb ohne
+  Fehler lief, aber nie eine Auswahl sah.
+- Aenderung: Der Helper erkennt das fehlende Primary-Global und endet mit
+  Exit-Code 3. Der Monitor liest Auswahlen dann ueber AT-SPI
+  (`selection_atspi.rs`, nur `object:text-selection-changed`, Passwortfelder
+  und inaktive Fenster ausgenommen, Timeouts auf jedem Aufruf) und beobachtet
+  zusaetzlich die Zwischenablage (`--selection-helper --clipboard`). Der
+  Zwischenablage-Helper prueft minuetlich, ob PRIMARY zurueck ist (Exit 4),
+  dann wechselt der Monitor zurueck. `org.a11y.Status.IsEnabled` wird bei
+  Bedarf gesetzt und wieder zurueckgesetzt (Markierungsdatei, da at-spi2-core
+  2.60 den Schalter in dconf speichert). Die Einstellungen zeigen die Quelle
+  leise im Abschnitt "Auswahl".
+- Verifikation: Helper meldet auf der echten Sitzung Exit 3. Live mit eigenen
+  Testfenstern: GTK 3, GTK 4 und Qt (kdialog) liefern Auswahlen, Passwortfelder
+  werden nicht gelesen; Qt auch, wenn `IsEnabled` erst nach dem Programmstart
+  gesetzt wird. Der komplette Monitor wechselte selbst auf AT-SPI, bot die
+  Testauswahlen an und setzte `IsEnabled` beim Beenden zurueck.
+- Betroffene Dateien: `src-tauri/backend/src/selection_wayland.rs`,
+  `selection_atspi.rs`, `clipboard_monitor.rs`, `server.rs`,
+  `src-tauri/api-types/src/lib.rs`, `src/logic.rs`, `src/settings_drawer.rs`,
+  `docs/WAYLAND.md`, `docs/ARCHITECTURE.md`, `docs/RUST_BACKEND.md`
+
 ## 2026-10-08 - Engine-Auswahl auf Piper und Seraphina reduziert
 
 - Nutzerwunsch: alle anderen TTS-Engines entfernen.

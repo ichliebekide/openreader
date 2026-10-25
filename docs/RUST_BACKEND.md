@@ -12,7 +12,7 @@ frueheren FastAPI-Dienst:
 
 | Route | Zweck |
 | --- | --- |
-| `GET /api/health` | Status (`backend: "rust"`) |
+| `GET /api/health` | Status (`backend: "rust"`, aktive Auswahlquelle `selection_input`) |
 | `GET/PUT /api/settings` | Einstellungen lesen/speichern |
 | `GET /api/desktop-context` | letzter KWin-Kontext |
 | `GET /api/tts/status` | Engine-Status |
@@ -28,7 +28,8 @@ Das Backend laeuft **im Tauri-Prozess** auf einer eigenen Tokio-Runtime
 zum Debuggen mit `OPENREADER_BACKEND=external ./scripts/dev.sh`.
 
 Variablen: `OPENREADER_HOST`, `OPENREADER_PORT`, `OPENREADER_BACKEND=external`,
-`OPENREADER_SELECTION_HELPER`, `OPENREADER_AUDIO_DEVICE`, `OPENREADER_OCR`,
+`OPENREADER_SELECTION_HELPER`, `OPENREADER_ATSPI=0` (keine AT-SPI-Auswahlen),
+`OPENREADER_AUDIO_DEVICE`, `OPENREADER_OCR`,
 `OPENREADER_OCRS_MODELS`, `OPENREADER_TESSERACT`, `OPENREADER_ESPEAK_DATA`,
 `RUST_LOG`. Log der App: `~/.cache/openreader/backend.log`.
 
@@ -36,7 +37,8 @@ Kommandos des Binarys:
 
 ```bash
 openreader-backend                      # API-Server
-openreader-backend --selection-helper   # PRIMARY-Selection-Helper (wl-clipboard-rs)
+openreader-backend --selection-helper   # PRIMARY-Selection-Helper (wl-clipboard-rs), Exit 3 = kein PRIMARY
+openreader-backend --selection-helper --clipboard   # Zwischenablage, Exit 4 = PRIMARY wieder da
 openreader-backend --download-voices    # Standard-Piper-Stimmen laden
 ```
 
@@ -52,7 +54,7 @@ nicht mehr. Siehe [UI](UI.md).
 | Bereich | Umsetzung |
 | --- | --- |
 | Einstellungen | `settings.rs`: liest bestehende `settings.json` unveraendert, migriert alte Engines nur im Speicher, gleiche Default-Profile |
-| Auswahl | `selection_wayland.rs` (wl-clipboard-rs, ext-/wlr-data-control, als `--selection-helper`-Prozess), Klipper via zbus als KDE-Fallback, Debounce + `SelectionGuard` |
+| Auswahl | `selection_wayland.rs` (wl-clipboard-rs, ext-/wlr-data-control, als `--selection-helper`-Prozess), ohne PRIMARY `selection_atspi.rs` (AT-SPI über zbus) plus `--selection-helper --clipboard`, Klipper via zbus als KDE-Fallback, Debounce, Quellen-Dedupe + `SelectionGuard`; Quellenwahl in `clipboard_monitor.rs` ([Wayland](WAYLAND.md)) |
 | Desktop-Kontext | zbus-Dienst `org.openreader.Desktop` fuer das KWin-Skript |
 | Edge/Seraphina | `tts/edge/`: Port von edge-tts 7.3.1 (Websocket, Sec-MS-GEC v2, Uhrkorrektur bei 403), MP3-Dekodierung mit symphonia |
 | Piper | `tts/piper/`: espeak-ng (statisch, gepinnter Commit) + ONNX Runtime (`ort`) |
@@ -121,4 +123,8 @@ OPENREADER_TEST_PIPEWIRE=1 cargo test -p openreader-backend clocked_real -- --no
 OPENREADER_TEST_OCR=1 cargo test -p openreader-backend real_tesseract    # braucht tesseract-ocr-eng
 OPENREADER_TEST_OCRS=1 cargo test -p openreader-backend real_ocrs        # laedt ocrs-Modelle
 cargo run -p openreader --example check_overlay_focus   # Live-Fokuscheck, OpenReader muss laufen
+OPENREADER_TEST_ATSPI=1 cargo test -p openreader-backend live_atspi -- --nocapture   # wartet 20 s auf eine echte Markierung
+cargo build -p openreader-backend && cargo run -p openreader-backend --example check_atspi_selection -- --monitor
+                                # AT-SPI live: eigene GTK-3/GTK-4/Qt-Testfenster, Auswahl per AT-SPI,
+                                # mit --monitor der komplette Monitor (ohne HTTP-Server und D-Bus-Namen)
 ```

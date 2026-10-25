@@ -640,7 +640,12 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
         .with_graceful_shutdown(shutdown)
         .await;
 
-    monitor.shutdown().await;
+    if integration {
+        // Also switches accessibility off again if the monitor switched it on.
+        monitor.shutdown().await;
+    } else {
+        monitor.stop();
+    }
     app.stop_speech().await;
     monitor_task.abort();
     bridge_task.abort();

@@ -21,6 +21,8 @@ OpenReader besteht aus vier klaren Schichten:
 3. Backend: `src-tauri/backend/` (Rust-Crate `openreader-backend`)
    - axum REST und WebSocket (API des frueheren FastAPI-Backends)
    - PRIMARY Selection Helper mit wl-clipboard-rs (ext-/wlr-data-control)
+   - ohne PRIMARY (KDE: Mittelklick-Einfügen aus): AT-SPI-Textauswahlen über
+     zbus plus Zwischenablage (Strg+C) als Rückfallebene, automatisch gewählt
    - Selection Monitoring
    - TTS Orchestration: Seraphina (Edge-Websocket + symphonia), Piper
      (espeak-ng + ONNX Runtime), Wiedergabe ueber cpal
@@ -35,13 +37,13 @@ OpenReader besteht aus vier klaren Schichten:
 ## Datenfluss
 
 ```text
-KDE PRIMARY Selection
-        |
-        v
-Rust ext-data-control Helper
-        |
-        v
-ClipboardMonitor -> SelectionGuard -> EventHub
+KDE PRIMARY Selection        ohne PRIMARY: AT-SPI-Bus      + Zwischenablage
+        |                     (text-selection-changed)       (Strg+C)
+        v                              |                         |
+Rust ext-data-control Helper   selection_atspi.rs    Helper --clipboard
+        |                              |                         |
+        v                              v                         v
+ClipboardMonitor (wählt die Quelle, Debounce, Dedupe) -> SelectionGuard -> EventHub
         |                              |
         |                              v
         |                        WebSocket /ws/events
@@ -58,6 +60,11 @@ DesktopContext <----- D-Bus ----- KWin Context Bridge
                                        v
                          TTSOrchestrator -> AudioPlayer
 ```
+
+Der Monitor startet den Helper für PRIMARY. Meldet dieser per Exit-Code, dass
+der Compositor kein PRIMARY anbietet, laufen AT-SPI und der
+Zwischenablage-Helper, bis PRIMARY wieder verfügbar ist. Details, Abdeckung
+und der Umgang mit `org.a11y.Status.IsEnabled`: [Wayland](WAYLAND.md).
 
 ## Frontend/Backend-Trennung
 

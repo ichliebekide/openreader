@@ -94,7 +94,12 @@ impl StateSet {
     }
 
     pub fn with(states: &[u32]) -> Self {
-        Self(states.iter().filter(|state| **state < 64).fold(0, |set, state| set | (1 << state)))
+        Self(
+            states
+                .iter()
+                .filter(|state| **state < 64)
+                .fold(0, |set, state| set | (1 << state)),
+        )
     }
 
     pub fn contains(self, state: u32) -> bool {
@@ -153,7 +158,8 @@ pub enum Verdict {
 /// field, that it belongs to the active window and not to OpenReader.
 pub async fn read_selection(bus: &dyn AccessibilityBus, object: &ObjectRef, own_pid: Option<u32>) -> Verdict {
     if let (Some(own_pid), Ok(pid)) = (own_pid, bus.process_id(&object.bus_name).await) {
-        if pid == own_pid {
+        // The web view of the OpenReader window lives in a child process.
+        if pid == own_pid || parent_pid(pid) == Some(own_pid) {
             return Verdict::Ignored("selection in OpenReader itself");
         }
     }
@@ -203,6 +209,12 @@ pub async fn read_selection(bus: &dyn AccessibilityBus, object: &ObjectRef, own_
     } else {
         Verdict::Selected(text)
     }
+}
+
+fn parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `pid (comm) state ppid ...`; comm may contain spaces and parentheses.
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Whether one of the application's top-level windows is the active window.
@@ -330,12 +342,28 @@ impl AccessibilityBus for ZbusAccessibilityBus {
     }
 
     async fn role(&self, object: &ObjectRef) -> anyhow::Result<u32> {
-        let reply = call(&self.connection, &object.bus_name, &object.path, ACCESSIBLE, "GetRole", &()).await?;
+        let reply = call(
+            &self.connection,
+            &object.bus_name,
+            &object.path,
+            ACCESSIBLE,
+            "GetRole",
+            &(),
+        )
+        .await?;
         Ok(reply.body().deserialize()?)
     }
 
     async fn state(&self, object: &ObjectRef) -> anyhow::Result<StateSet> {
-        let reply = call(&self.connection, &object.bus_name, &object.path, ACCESSIBLE, "GetState", &()).await?;
+        let reply = call(
+            &self.connection,
+            &object.bus_name,
+            &object.path,
+            ACCESSIBLE,
+            "GetState",
+            &(),
+        )
+        .await?;
         let words: Vec<u32> = reply.body().deserialize()?;
         Ok(StateSet::from_words(&words))
     }
@@ -350,24 +378,56 @@ impl AccessibilityBus for ZbusAccessibilityBus {
     }
 
     async fn selection_count(&self, object: &ObjectRef) -> anyhow::Result<i32> {
-        let reply = call(&self.connection, &object.bus_name, &object.path, TEXT, "GetNSelections", &()).await?;
+        let reply = call(
+            &self.connection,
+            &object.bus_name,
+            &object.path,
+            TEXT,
+            "GetNSelections",
+            &(),
+        )
+        .await?;
         Ok(reply.body().deserialize()?)
     }
 
     async fn selection(&self, object: &ObjectRef, index: i32) -> anyhow::Result<(i32, i32)> {
-        let reply = call(&self.connection, &object.bus_name, &object.path, TEXT, "GetSelection", &(index,)).await?;
+        let reply = call(
+            &self.connection,
+            &object.bus_name,
+            &object.path,
+            TEXT,
+            "GetSelection",
+            &(index,),
+        )
+        .await?;
         Ok(reply.body().deserialize()?)
     }
 
     async fn text(&self, object: &ObjectRef, start: i32, end: i32) -> anyhow::Result<String> {
-        let reply = call(&self.connection, &object.bus_name, &object.path, TEXT, "GetText", &(start, end)).await?;
+        let reply = call(
+            &self.connection,
+            &object.bus_name,
+            &object.path,
+            TEXT,
+            "GetText",
+            &(start, end),
+        )
+        .await?;
         Ok(reply.body().deserialize()?)
     }
 }
 
 /// Address of the accessibility bus (`org.a11y.Bus.GetAddress` on the session bus).
 pub async fn a11y_bus_address(session: &zbus::Connection) -> anyhow::Result<String> {
-    let reply = call(session, STATUS_DESTINATION, STATUS_PATH, "org.a11y.Bus", "GetAddress", &()).await?;
+    let reply = call(
+        session,
+        STATUS_DESTINATION,
+        STATUS_PATH,
+        "org.a11y.Bus",
+        "GetAddress",
+        &(),
+    )
+    .await?;
     Ok(reply.body().deserialize()?)
 }
 
@@ -405,10 +465,20 @@ pub async fn subscribe(connection: &zbus::Connection) -> anyhow::Result<impl Str
     .await;
     if registered.is_err() {
         // at-spi2-core before 2.46 knows only `RegisterEvent(s)`.
-        call(connection, REGISTRY, REGISTRY_PATH, REGISTRY, "RegisterEvent", &(SELECTION_EVENT,)).await?;
+        call(
+            connection,
+            REGISTRY,
+            REGISTRY_PATH,
+            REGISTRY,
+            "RegisterEvent",
+            &(SELECTION_EVENT,),
+        )
+        .await?;
     }
     // A closed connection (bus restart) ends the stream; errors are skipped.
-    Ok(Box::pin(stream.filter_map(|message| async move { message.ok().as_ref().and_then(parse_message) })))
+    Ok(Box::pin(stream.filter_map(|message| async move {
+        message.ok().as_ref().and_then(parse_message)
+    })))
 }
 
 // ------------------------------------------------------------------ IsEnabled
@@ -435,7 +505,9 @@ impl AccessibilityFlag {
     }
 
     pub fn default_marker() -> PathBuf {
-        crate::cache_home().join("openreader").join("a11y-enabled-by-openreader")
+        crate::cache_home()
+            .join("openreader")
+            .join("a11y-enabled-by-openreader")
     }
 
     fn owned(&self) -> bool {
@@ -534,6 +606,7 @@ pub async fn run_source(
     connected: Arc<dyn Fn(bool) + Send + Sync>,
 ) {
     let mut delay = Duration::from_secs(1);
+    let mut failures = 0u32;
     loop {
         let started = Instant::now();
         let setup = async {
@@ -546,12 +619,21 @@ pub async fn run_source(
         match setup.await {
             Ok((connection, events)) => {
                 tracing::info!("watching text selections over the accessibility bus (AT-SPI)");
+                failures = 0;
                 connected(true);
                 let bus: Arc<dyn AccessibilityBus> = Arc::new(ZbusAccessibilityBus::new(connection));
                 process_events(events, bus, receiver.clone(), quiet, Some(std::process::id())).await;
                 tracing::warn!("accessibility bus connection lost; reconnecting");
             }
-            Err(error) => tracing::warn!("AT-SPI selections unavailable: {error:#}"),
+            Err(error) => {
+                // Logged once; retries stay quiet until it works again.
+                if failures == 0 {
+                    tracing::warn!("AT-SPI selections unavailable, clipboard only: {error:#}");
+                } else {
+                    tracing::debug!("AT-SPI still unavailable: {error:#}");
+                }
+                failures += 1;
+            }
         }
         connected(false);
         if started.elapsed() >= Duration::from_secs(30) {
@@ -630,7 +712,14 @@ mod tests {
     fn app(bus: &mut FakeBus, name: &str, active: bool) -> ObjectRef {
         let window = ObjectRef::new(name, "/org/a11y/atspi/accessible/1");
         let states = if active { vec![state::ACTIVE] } else { vec![] };
-        bus.objects.insert(window.clone(), FakeObject { role: 23, states, ..Default::default() });
+        bus.objects.insert(
+            window.clone(),
+            FakeObject {
+                role: 23,
+                states,
+                ..Default::default()
+            },
+        );
         bus.windows.insert(name.into(), vec![window]);
         ObjectRef::new(name, "/org/a11y/atspi/accessible/42")
     }
@@ -658,11 +747,29 @@ mod tests {
             None
         );
         assert_eq!(
-            parse_selection_event(Some(":1.42"), Some("/a"), Some("org.a11y.atspi.Event.Window"), Some(SELECTION_MEMBER)),
+            parse_selection_event(
+                Some(":1.42"),
+                Some("/a"),
+                Some("org.a11y.atspi.Event.Window"),
+                Some(SELECTION_MEMBER)
+            ),
             None
         );
-        assert_eq!(parse_selection_event(None, Some("/a"), Some(EVENT_OBJECT), Some(SELECTION_MEMBER)), None);
-        assert_eq!(parse_selection_event(Some(":1.1"), Some("a"), Some(EVENT_OBJECT), Some(SELECTION_MEMBER)), None);
+        assert_eq!(
+            parse_selection_event(None, Some("/a"), Some(EVENT_OBJECT), Some(SELECTION_MEMBER)),
+            None
+        );
+        assert_eq!(
+            parse_selection_event(Some(":1.1"), Some("a"), Some(EVENT_OBJECT), Some(SELECTION_MEMBER)),
+            None
+        );
+    }
+
+    #[test]
+    fn parent_process_is_read_from_proc() {
+        let parent = unsafe { libc::getppid() } as u32;
+        assert_eq!(parent_pid(std::process::id()), Some(parent));
+        assert_eq!(parent_pid(u32::MAX), None);
     }
 
     #[test]
@@ -680,7 +787,10 @@ mod tests {
         let object = app(&mut bus, ":1.5", true);
         bus.objects
             .insert(object.clone(), text_object("Hallo schöne Welt", vec![(6, 12)]));
-        assert_eq!(read_selection(&bus, &object, None).await, Verdict::Selected("schöne".into()));
+        assert_eq!(
+            read_selection(&bus, &object, None).await,
+            Verdict::Selected("schöne".into())
+        );
     }
 
     #[tokio::test]
@@ -690,7 +800,10 @@ mod tests {
         let mut field = text_object("geheim123", vec![(0, 9)]);
         field.role = role::PASSWORD_TEXT;
         bus.objects.insert(object.clone(), field);
-        assert_eq!(read_selection(&bus, &object, None).await, Verdict::Ignored("password field"));
+        assert_eq!(
+            read_selection(&bus, &object, None).await,
+            Verdict::Ignored("password field")
+        );
         assert!(bus.text_reads.lock().unwrap().is_empty());
     }
 
@@ -698,7 +811,8 @@ mod tests {
     async fn inactive_windows_own_process_and_empty_selections() {
         let mut bus = FakeBus::default();
         let background = app(&mut bus, ":1.6", false);
-        bus.objects.insert(background.clone(), text_object("Hintergrund", vec![(0, 11)]));
+        bus.objects
+            .insert(background.clone(), text_object("Hintergrund", vec![(0, 11)]));
         assert_eq!(
             read_selection(&bus, &background, None).await,
             Verdict::Ignored("not in the active window")
@@ -706,7 +820,8 @@ mod tests {
         assert!(bus.text_reads.lock().unwrap().is_empty());
 
         let own = app(&mut bus, ":1.7", true);
-        bus.objects.insert(own.clone(), text_object("Eigenes Fenster", vec![(0, 7)]));
+        bus.objects
+            .insert(own.clone(), text_object("Eigenes Fenster", vec![(0, 7)]));
         bus.pids.insert(":1.7".into(), 4242);
         assert_eq!(
             read_selection(&bus, &own, Some(4242)).await,
@@ -730,7 +845,10 @@ mod tests {
         let object = app(&mut bus, ":1.5", true);
         bus.objects
             .insert(object.clone(), text_object("eins zwei drei", vec![(0, 4), (10, 14)]));
-        assert_eq!(read_selection(&bus, &object, None).await, Verdict::Selected("eins\ndrei".into()));
+        assert_eq!(
+            read_selection(&bus, &object, None).await,
+            Verdict::Selected("eins\ndrei".into())
+        );
     }
 
     #[derive(Default)]
@@ -793,7 +911,10 @@ mod tests {
         let flag = AccessibilityFlag::new(directory.path().join("marker"));
         assert!(!flag.owned());
         std::fs::write(directory.path().join("marker"), "x").unwrap();
-        assert!(flag.owned(), "a marker left by a previous run means OpenReader switched it on");
+        assert!(
+            flag.owned(),
+            "a marker left by a previous run means OpenReader switched it on"
+        );
     }
 
     /// Live check on the real session: opens nothing itself, but registers for
@@ -818,7 +939,11 @@ mod tests {
             let role = bus.role(&object).await.unwrap_or(0);
             match &verdict {
                 Verdict::Selected(text) => {
-                    println!("selection from {} (role {role}): {} chars", object.bus_name, text.chars().count());
+                    println!(
+                        "selection from {} (role {role}): {} chars",
+                        object.bus_name,
+                        text.chars().count()
+                    );
                     return;
                 }
                 other => println!("event from {} (role {role}): {other:?}", object.bus_name),

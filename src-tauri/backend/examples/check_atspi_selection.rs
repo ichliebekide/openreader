@@ -116,7 +116,11 @@ async fn find_application(connection: &zbus::Connection, bus: &ZbusAccessibility
 }
 
 /// Text objects of the test window (bounded walk, test only).
-async fn text_objects(connection: &zbus::Connection, bus: &ZbusAccessibilityBus, application: &str) -> Vec<(ObjectRef, u32)> {
+async fn text_objects(
+    connection: &zbus::Connection,
+    bus: &ZbusAccessibilityBus,
+    application: &str,
+) -> Vec<(ObjectRef, u32)> {
     let mut queue = vec![ObjectRef::new(application, "/org/a11y/atspi/accessible/root")];
     let mut found = Vec::new();
     let mut visited = 0;
@@ -126,7 +130,10 @@ async fn text_objects(connection: &zbus::Connection, bus: &ZbusAccessibilityBus,
             break;
         }
         let role = bus.role(&object).await.unwrap_or(0);
-        if interfaces(connection, &object).await.iter().any(|name| name == "org.a11y.atspi.Text")
+        if interfaces(connection, &object)
+            .await
+            .iter()
+            .any(|name| name == "org.a11y.atspi.Text")
             && matches!(role, 40 | 61 | 79)
         {
             found.push((object.clone(), role));
@@ -146,7 +153,10 @@ async fn select(connection: &zbus::Connection, object: &ObjectRef, start: i32, e
             &(0i32, start, end),
         )
         .await;
-    let ok = set.ok().and_then(|reply| reply.body().deserialize::<bool>().ok()).unwrap_or(false);
+    let ok = set
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false);
     if ok {
         return true;
     }
@@ -162,6 +172,32 @@ async fn select(connection: &zbus::Connection, object: &ObjectRef, start: i32, e
         .ok()
         .and_then(|reply| reply.body().deserialize::<bool>().ok())
         .unwrap_or(false)
+}
+
+/// A detached test window process, terminated on drop.
+struct TestWindow(u32);
+
+impl Drop for TestWindow {
+    fn drop(&mut self) {
+        unsafe {
+            libc::kill(self.0 as i32, libc::SIGTERM);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Start `program` through a short-lived shell so it is not our child;
+/// returns its pid.
+async fn spawn_detached(program: &str, args: &[String]) -> Option<u32> {
+    let output = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#""$0" "$@" >/dev/null 2>&1 & echo $!"#)
+        .arg(program)
+        .args(args)
+        .output()
+        .await
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 /// Records what the monitor would publish (source and length, no text).
@@ -284,32 +320,30 @@ async fn run() -> ExitCode {
     // `--only=qt` (or `gtk 4`, ...) runs a single case.
     let only = std::env::args().find_map(|argument| argument.strip_prefix("--only=").map(str::to_lowercase));
     for case in cases {
-        if only.as_ref().is_some_and(|only| !case.toolkit.to_lowercase().contains(only.as_str())) {
+        if only
+            .as_ref()
+            .is_some_and(|only| !case.toolkit.to_lowercase().contains(only.as_str()))
+        {
             continue;
         }
         if openreader_backend::which(case.program).is_none() {
             println!("{}: {} fehlt, übersprungen", case.toolkit, case.program);
             continue;
         }
-        let mut child = match tokio::process::Command::new(case.program)
-            .args(&case.args)
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                println!("{}: Start fehlgeschlagen: {error}", case.toolkit);
-                continue;
-            }
+        // Started detached (not as our child): the monitor ignores selections
+        // in its own process and its children, like the OpenReader web view.
+        let Some(pid) = spawn_detached(case.program, &case.args).await else {
+            println!("{}: Start fehlgeschlagen", case.toolkit);
+            continue;
         };
-        let pid = child.id().unwrap_or(0);
+        let child = TestWindow(pid);
         if enable_late {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             flag.ensure_enabled(&session).await.expect("IsEnabled");
         }
         let Some(application) = find_application(&connection, &bus, pid).await else {
             println!("{}: erscheint nicht auf dem Barrierefreiheits-Bus", case.toolkit);
-            let _ = child.kill().await;
+            drop(child);
             continue;
         };
         // Let the window map and become active.
@@ -323,14 +357,20 @@ async fn run() -> ExitCode {
             published.0.lock().unwrap().clear();
             let selected = select(&connection, &object, 0, 10).await;
             tokio::time::sleep(Duration::from_millis(if monitor_mode { 1800 } else { 1200 })).await;
-            let kind = if object_role == role::PASSWORD_TEXT { "Passwortfeld" } else { "Textfeld" };
+            let kind = if object_role == role::PASSWORD_TEXT {
+                "Passwortfeld"
+            } else {
+                "Textfeld"
+            };
             let seen: Vec<_> = verdicts
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|(name, _, _)| *name == application)
                 .map(|(_, role, verdict)| match verdict {
-                    Verdict::Selected(text) => format!("role {role}: Auswahl gelesen ({} Zeichen)", text.chars().count()),
+                    Verdict::Selected(text) => {
+                        format!("role {role}: Auswahl gelesen ({} Zeichen)", text.chars().count())
+                    }
                     other => format!("role {role}: {other:?}"),
                 })
                 .collect();
@@ -341,7 +381,11 @@ async fn run() -> ExitCode {
                 "{} {kind} (role {object_role}): SetSelection {} -> Ereignisse: {}",
                 case.toolkit,
                 if selected { "ok" } else { "abgelehnt" },
-                if seen.is_empty() { "keine".to_string() } else { seen.join("; ") }
+                if seen.is_empty() {
+                    "keine".to_string()
+                } else {
+                    seen.join("; ")
+                }
             );
             if monitor_mode {
                 let offered = published.0.lock().unwrap().clone();
@@ -352,7 +396,7 @@ async fn run() -> ExitCode {
                 }
             }
         }
-        let _ = child.kill().await;
+        drop(child);
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 
