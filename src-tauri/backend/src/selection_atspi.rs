@@ -220,8 +220,9 @@ async fn application_is_active(bus: &dyn AccessibilityBus, bus_name: &str) -> bo
 
 /// Receives what the AT-SPI source found (normally the selection monitor).
 pub trait SelectionReceiver: Send + Sync + 'static {
-    fn accessible_selection(&self, text: String);
-    fn accessible_selection_cleared(&self);
+    /// `origin` identifies the accessible object (bus name and path).
+    fn accessible_selection(&self, origin: &str, text: String);
+    fn accessible_selection_cleared(&self, origin: &str);
 }
 
 /// Coalesce selection events per quiet period (drag selections fire one event
@@ -262,7 +263,7 @@ pub async fn process_events<S>(
                     let verdict = tokio::time::timeout(QUERY_BUDGET, read_selection(&*bus, &object, own_pid))
                         .await
                         .unwrap_or(Verdict::Ignored("application did not answer in time"));
-                    deliver(&*receiver, verdict);
+                    deliver(&*receiver, &object, verdict);
                 }));
             }
         }
@@ -272,10 +273,11 @@ pub async fn process_events<S>(
     }
 }
 
-fn deliver(receiver: &dyn SelectionReceiver, verdict: Verdict) {
+fn deliver(receiver: &dyn SelectionReceiver, object: &ObjectRef, verdict: Verdict) {
+    let origin = format!("{}{}", object.bus_name, object.path);
     match verdict {
-        Verdict::Selected(text) => receiver.accessible_selection(text),
-        Verdict::Cleared => receiver.accessible_selection_cleared(),
+        Verdict::Selected(text) => receiver.accessible_selection(&origin, text),
+        Verdict::Cleared => receiver.accessible_selection_cleared(&origin),
         Verdict::Ignored(reason @ "password field") => tracing::info!("accessibility selection ignored ({reason})"),
         Verdict::Ignored(reason) => tracing::debug!("accessibility selection ignored ({reason})"),
     }
@@ -438,6 +440,11 @@ impl AccessibilityFlag {
 
     fn owned(&self) -> bool {
         self.owned.load(Ordering::SeqCst) || self.marker.exists()
+    }
+
+    /// Current value of `org.a11y.Status.IsEnabled`.
+    pub async fn is_enabled(session: &zbus::Connection) -> anyhow::Result<bool> {
+        Self::get(session, "IsEnabled").await
     }
 
     async fn get(session: &zbus::Connection, property: &str) -> anyhow::Result<bool> {
@@ -733,10 +740,10 @@ mod tests {
     }
 
     impl SelectionReceiver for Received {
-        fn accessible_selection(&self, text: String) {
+        fn accessible_selection(&self, _origin: &str, text: String) {
             self.selections.lock().unwrap().push(text);
         }
-        fn accessible_selection_cleared(&self) {
+        fn accessible_selection_cleared(&self, _origin: &str) {
             *self.cleared.lock().unwrap() += 1;
         }
     }

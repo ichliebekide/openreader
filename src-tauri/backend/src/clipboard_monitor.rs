@@ -178,9 +178,10 @@ struct CandidateState {
     observed_text: String,
     pending: Option<JoinHandle<()>>,
     recent: RecentSelections,
-    /// Last AT-SPI selection; the same selection reported again (focus
-    /// changes) is not offered twice until it was cleared.
-    accessible_text: String,
+    /// Last AT-SPI selection (object, text); the same selection of the same
+    /// object reported again (focus changes) is not offered twice until it
+    /// was cleared.
+    accessible: Option<(String, String)>,
 }
 
 /// What ended a helper process.
@@ -591,17 +592,18 @@ impl ClipboardMonitor {
     }
 
     /// An AT-SPI selection (already debounced by the AT-SPI source).
-    pub fn offer_accessible(&self, text: &str) {
+    pub fn offer_accessible(&self, origin: &str, text: &str) {
         let text = normalize_selection(text);
         if text.is_empty() {
             return;
         }
         {
             let mut state = self.inner.state.lock().unwrap();
-            if text == state.accessible_text {
+            let current = (origin.to_string(), text.clone());
+            if state.accessible.as_ref() == Some(&current) {
                 return;
             }
-            state.accessible_text = text.clone();
+            state.accessible = Some(current);
             if !state.recent.admit(&text, SelectionSource::Accessibility, Instant::now()) {
                 return;
             }
@@ -610,8 +612,11 @@ impl ClipboardMonitor {
         tokio::spawn(async move { inner.sink.publish(text, SelectionSource::Accessibility).await });
     }
 
-    pub fn clear_accessible(&self) {
-        self.inner.state.lock().unwrap().accessible_text.clear();
+    pub fn clear_accessible(&self, origin: &str) {
+        let mut state = self.inner.state.lock().unwrap();
+        if state.accessible.as_ref().is_some_and(|(current, _)| current == origin) {
+            state.accessible = None;
+        }
     }
 
     fn cancel_pending(&self) {
@@ -623,12 +628,12 @@ impl ClipboardMonitor {
 
 #[cfg(target_os = "linux")]
 impl SelectionReceiver for ClipboardMonitor {
-    fn accessible_selection(&self, text: String) {
-        self.offer_accessible(&text);
+    fn accessible_selection(&self, origin: &str, text: String) {
+        self.offer_accessible(origin, &text);
     }
 
-    fn accessible_selection_cleared(&self) {
-        self.clear_accessible();
+    fn accessible_selection_cleared(&self, origin: &str) {
+        self.clear_accessible(origin);
     }
 }
 
@@ -787,10 +792,13 @@ mod tests {
     async fn accessible_and_clipboard_selection_of_the_same_text_fire_once() {
         let capture = Capture::new();
         let monitor = monitor(&capture, Duration::from_millis(20), None);
-        monitor.offer_accessible("Markierter  Text");
+        monitor.offer_accessible(":1.5/a/1", "Markierter  Text");
         tokio::time::sleep(Duration::from_millis(30)).await;
         // Same selection reported again (focus change): not offered twice.
-        monitor.offer_accessible("Markierter Text");
+        monitor.offer_accessible(":1.5/a/1", "Markierter Text");
+        // Clearing another object does not reset it.
+        monitor.clear_accessible(":1.6/a/1");
+        monitor.offer_accessible(":1.5/a/1", "Markierter Text");
         // The user presses Ctrl+C on it.
         monitor.schedule_candidate("Markierter Text".into(), SelectionSource::Clipboard, true);
         tokio::time::sleep(Duration::from_millis(60)).await;
@@ -798,12 +806,18 @@ mod tests {
         assert_eq!(*capture.sources.lock().unwrap(), [SelectionSource::Accessibility]);
 
         // After the selection was cleared, selecting it again is offered again.
-        monitor.clear_accessible();
-        monitor.offer_accessible("Markierter Text");
+        monitor.clear_accessible(":1.5/a/1");
+        monitor.offer_accessible(":1.5/a/1", "Markierter Text");
+        // The same words selected in another object are offered too.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        monitor.offer_accessible(":1.7/a/3", "Markierter Text");
         // A different copied text goes through.
         monitor.schedule_candidate("Kopiert".into(), SelectionSource::Clipboard, true);
         tokio::time::sleep(Duration::from_millis(60)).await;
-        assert_eq!(*capture.published.lock().unwrap(), ["Markierter Text", "Markierter Text", "Kopiert"]);
+        assert_eq!(
+            *capture.published.lock().unwrap(),
+            ["Markierter Text", "Markierter Text", "Markierter Text", "Kopiert"]
+        );
     }
 
     fn fake_helper(directory: &Path, script: &str) -> PathBuf {
