@@ -17,4 +17,7 @@ fi
 # runs `trunk serve` (src-tauri/tauri.conf.json) and the Tauri app.
 "$ROOT_DIR/scripts/ensure-ui-toolchain.sh"
 
+# Window icon on Wayland: KDE finds it through openreader.desktop.
+"$ROOT_DIR/scripts/install-desktop-entry.sh" || echo "Hinweis: App-Icon konnte nicht registriert werden." >&2
+
 cargo tauri dev
