@@ -77,6 +77,10 @@ pub struct PlaybackModel {
     pub session_id: Option<String>,
     pub text: String,
     pub word: Option<(i64, i64)>,
+    /// End (UTF-16) of the furthest word spoken in this session. The player
+    /// reports no word during pauses between words; the progress bar keeps
+    /// this instead of dropping back to zero.
+    pub spoken_until: i64,
     pub speaking: bool,
     pub paused: bool,
     pub error: Option<String>,
@@ -90,6 +94,7 @@ impl Default for PlaybackModel {
             session_id: None,
             text: String::new(),
             word: None,
+            spoken_until: 0,
             speaking: false,
             paused: false,
             error: None,
@@ -116,6 +121,7 @@ impl PlaybackModel {
         if state.session_id != self.session_id {
             self.session_id = state.session_id.clone();
             self.text.clear();
+            self.spoken_until = 0;
             needs_snapshot = state.speaking && text.is_none();
         }
         if let Some(text) = text {
@@ -125,6 +131,11 @@ impl PlaybackModel {
             (true, Some(start), Some(end)) => Some((start, end)),
             _ => None,
         };
+        if !state.speaking {
+            self.spoken_until = 0;
+        } else if let Some((_, end)) = self.word {
+            self.spoken_until = self.spoken_until.max(end);
+        }
         self.speaking = state.speaking;
         self.paused = state.paused;
         self.error = state.error.clone();
@@ -142,6 +153,12 @@ impl PlaybackModel {
         self.speaking = false;
         self.paused = false;
         self.word = None;
+        self.spoken_until = 0;
+    }
+
+    /// Reading progress `0.0..=1.0`; steady across pauses between words.
+    pub fn progress(&self) -> f64 {
+        reading_progress(&self.text, (self.spoken_until > 0).then_some((0, self.spoken_until)))
     }
 }
 
@@ -452,6 +469,26 @@ mod tests {
         model.apply(&state(12, "a", false, Some((7, 12))), None);
         assert_eq!(model.word, None);
         assert!(!model.shows_reading_text());
+    }
+
+    #[test]
+    fn progress_holds_during_pauses_between_words() {
+        let mut model = PlaybackModel::default();
+        model.apply(&state(1, "a", true, None), Some("abcdefgh"));
+        model.apply(&state(2, "a", true, Some((0, 4))), None);
+        assert_eq!(model.progress(), 0.5);
+        // Between two words the player reports no word: no highlight, same progress.
+        model.apply(&state(3, "a", true, None), None);
+        assert_eq!(model.word, None);
+        assert_eq!(model.progress(), 0.5);
+        model.apply(&state(4, "a", true, Some((5, 8))), None);
+        assert_eq!(model.progress(), 1.0);
+        // A new session starts from zero, stopping resets it.
+        model.apply(&state(5, "b", true, None), Some("neu"));
+        assert_eq!(model.progress(), 0.0);
+        model.apply(&state(6, "b", true, Some((0, 3))), None);
+        model.apply(&state(7, "b", false, None), None);
+        assert_eq!(model.progress(), 0.0);
     }
 
     #[test]

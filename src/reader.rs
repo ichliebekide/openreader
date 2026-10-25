@@ -268,7 +268,7 @@ fn PlayerBar() -> impl IntoView {
     let progress = Memo::new(move |_| {
         state.playback.with(|model| {
             if model.shows_reading_text() {
-                logic::reading_progress(&model.text, model.word)
+                model.progress()
             } else {
                 0.0
             }
