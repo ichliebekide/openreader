@@ -11,5 +11,9 @@ src-tauri/target/
 *.deb
 *.rpm
 
-# Local proprietary reference binaries; never distribute with OpenReader.
+# Local proprietary reference binaries and licensed voice data; never distribute with OpenReader.
 /Decompile/
+/Voice Pack/
+
+# Claude Code worktrees and local session state
+/.claude/
