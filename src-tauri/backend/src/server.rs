@@ -249,7 +249,12 @@ impl ReaderApp {
         }
         let _lock = self.speech_lock.lock().await;
         if self.is_speaking() {
-            return SpeakResponse::new(false, true);
+            // A new text replaces the current reading (like MWS Reader); the
+            // same text again (double click, duplicate request) keeps it going.
+            if self.playback.lock().unwrap().text == text {
+                return SpeakResponse::new(false, true);
+            }
+            self.stop_speech_locked().await;
         }
         {
             let mut data = self.playback.lock().unwrap();

@@ -265,6 +265,11 @@ fn SelectionSection() -> impl IntoView {
             .settings
             .with(|s| s.as_ref().map(|s| s.ignore_terminal_windows).unwrap_or(true))
     });
+    let clear_primary = Memo::new(move |_| {
+        state
+            .settings
+            .with(|s| s.as_ref().map(|s| s.clear_primary_after_capture).unwrap_or(false))
+    });
     let disabled = move || state.settings.with(Option::is_none);
     let source_note = Memo::new(move |_| state.health.with(|health| logic::selection_source_note(health.as_ref())));
 
@@ -308,6 +313,27 @@ fn SelectionSection() -> impl IntoView {
                     }
                 />
             </label>
+            <label class="switch-row">
+                <span>"Markierung nach dem Erfassen leeren"</span>
+                <input
+                    class="switch clear-primary"
+                    type="checkbox"
+                    role="switch"
+                    disabled=disabled
+                    prop:checked=move || clear_primary.get()
+                    on:change=move |event| {
+                        let checked = input_checked(&event);
+                        state.update_settings(move |mut settings| {
+                            settings.clear_primary_after_capture = checked;
+                            settings
+                        });
+                    }
+                />
+            </label>
+            <p class="field-note">
+                "Verhindert versehentliches Einfügen mit der mittleren Maustaste. \
+                 Manche Programme heben danach die farbige Markierung auf."
+            </p>
         </section>
     }
 }

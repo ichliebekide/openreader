@@ -98,6 +98,34 @@ impl SelectionSink for GuardedPublisher {
             active_app: snapshot.active_resource_class,
             created_at: Utc::now(),
         }));
+        if source == SelectionSource::Primary && self.guard.clears_primary_after_capture() {
+            tokio::task::spawn_blocking(clear_primary_selection);
+        }
+    }
+}
+
+/// `exec` fails with ETXTBSY while another thread briefly holds a write
+/// handle to the executable across a fork (freshly written scripts in tests,
+/// a binary being replaced by a rebuild); a short retry rides that out.
+async fn spawn_retrying_busy(command: &mut Command) -> std::io::Result<tokio::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 5 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Drop the PRIMARY selection so a middle click has nothing to paste.
+fn clear_primary_selection() {
+    use wl_clipboard_rs::copy::{clear, ClipboardType, Seat};
+    match clear(ClipboardType::Primary, Seat::All) {
+        Ok(()) => tracing::info!("primary selection cleared after capture"),
+        Err(error) => tracing::warn!("could not clear the primary selection: {error}"),
     }
 }
 
@@ -436,7 +464,7 @@ impl ClipboardMonitor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let started = Instant::now();
-        let mut child = match command.spawn() {
+        let mut child = match spawn_retrying_busy(command).await {
             Ok(child) => child,
             Err(error) => {
                 tracing::warn!("selection helper could not be started: {error}");
@@ -874,7 +902,7 @@ esac"#,
         let outcome = monitor
             .watch_frames(&mut command, SelectionSource::Primary, Some(SelectionInput::Primary))
             .await;
-        assert!(matches!(outcome, HelperOutcome::Ended { code: Some(0), .. }));
+        assert!(matches!(outcome, HelperOutcome::Ended { code: Some(0), .. }), "{outcome:?}");
         assert_eq!(status.get(), Some(SelectionInput::Primary));
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(*capture.published.lock().unwrap(), ["Auswahl"]);

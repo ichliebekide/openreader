@@ -114,9 +114,24 @@ async fn api_pause_resume_stop_and_duplicate_requests() {
     assert_eq!(*tts.calls.lock().unwrap(), ["Hallo"]);
     assert_eq!(call(&app, "POST", "/api/tts/pause", None).await.1["paused"], true);
     assert_eq!(call(&app, "GET", "/api/tts/playback", None).await.1["speaking"], true);
-    let again = call(&app, "POST", "/api/speak", Some(serde_json::json!({"text": "Nochmals"}))).await.1;
-    assert_eq!(again["started"], false);
-    assert_eq!(call(&app, "POST", "/api/tts/resume", None).await.1["paused"], false);
+    // The same text again keeps the current reading (and its pause).
+    let same = call(&app, "POST", "/api/speak", Some(serde_json::json!({"text": "Hallo"}))).await.1;
+    assert_eq!(same["started"], false);
+    assert_eq!(call(&app, "GET", "/api/tts/playback", None).await.1["paused"], true);
+    // A new text replaces the current reading without pressing stop first.
+    let replaced = call(&app, "POST", "/api/speak", Some(serde_json::json!({"text": "Nochmals"}))).await.1;
+    assert_eq!(replaced["started"], true);
+    for _ in 0..200 {
+        if tts.calls.lock().unwrap().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(*tts.calls.lock().unwrap(), ["Hallo", "Nochmals"]);
+    let playback = call(&app, "GET", "/api/tts/playback", None).await.1;
+    assert_eq!((playback["speaking"].clone(), playback["paused"].clone()), (true.into(), false.into()));
+    let snapshot = app.reading_snapshot();
+    assert_eq!(snapshot.text, "Nochmals");
     let state = call(&app, "POST", "/api/tts/stop", None).await.1;
     assert_eq!((state["speaking"].clone(), state["paused"].clone()), (false.into(), false.into()));
     assert_eq!(call(&app, "POST", "/api/tts/pause", None).await.1["paused"], false);

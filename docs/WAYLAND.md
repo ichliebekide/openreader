@@ -138,6 +138,19 @@ Programmen; deshalb gelten dieselben Filter wie für Auswahlen, und zusätzlich:
 
 - Desktop-Portal-basierte Shortcuts für explizites "Auswahl vorlesen"
 
+### Markierung nach dem Erfassen leeren
+
+Optional (Einstellungen -> Auswahl, `clear_primary_after_capture`, Standard aus):
+Nachdem eine PRIMARY-Auswahl angenommen und als Blase angeboten wurde, leert
+OpenReader die PRIMARY-Auswahl ueber data-control (`wl_clipboard_rs::copy::clear`).
+Ein versehentlicher Mittelklick fuegt dann nichts ein, ohne dass man
+Mittelklick-Einfuegen in KDE abschalten muss (was PRIMARY ganz entfernt). Abgelehnte
+Auswahlen (z. B. in Terminals) bleiben unangetastet. Manche Programme, etwa
+Konsole, heben ihre sichtbare Markierung auf, sobald sie die Auswahl verlieren.
+
+Ein neuer Vorlese-Auftrag waehrend einer laufenden Wiedergabe ersetzt diese
+(wie bei MWS Reader); derselbe Text erneut laesst sie weiterlaufen.
+
 ## Overlay-Position
 
 Normale Wayland-Clients dürfen die globale Cursorposition nicht frei abfragen. Deshalb gibt es drei Stufen:

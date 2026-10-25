@@ -234,7 +234,7 @@ mod tests {
         let mut subset = settings.clone();
         subset.voice_profiles.truncate(1);
         let expected = format!(
-            "{}],\n  \"ocr_engine\": \"tesseract\",\n  \"overlay_bubble_size\": 48\n}}",
+            "{}],\n  \"ocr_engine\": \"tesseract\",\n  \"overlay_bubble_size\": 48,\n  \"clear_primary_after_capture\": false\n}}",
             python.strip_suffix("]\n}").unwrap()
         );
         assert_eq!(to_json(&subset), expected);

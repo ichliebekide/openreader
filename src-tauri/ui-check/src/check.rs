@@ -432,6 +432,17 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     let preview = page.eval("document.querySelector('.bubble-preview').getBoundingClientRect().width")?;
     ensure!(preview == serde_json::json!(64), "bubble preview {preview}");
     ensure!(playback(fixture).speaking, "saving the bubble size stopped playback");
+
+    // Auswahl: clearing the selection after capture is an opt-in backend setting.
+    page.eval(
+        "(() => { const c = document.querySelector('input.clear-primary'); c.checked = true;
+                  c.dispatchEvent(new Event('change', { bubbles: true })); return true; })()",
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fixture.app.settings().clear_primary_after_capture {
+        ensure!(Instant::now() < deadline, "clear-after-capture not saved");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     page.eval("document.querySelector('.drawer-body').scrollTop = 1e6, true")?;
     page.screenshot("fokus-dark-settings-lower")?;
     page.tab.press_key("Escape")?;

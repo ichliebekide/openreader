@@ -304,6 +304,11 @@ pub struct ReaderSettings {
         deserialize_with = "lenient_i64"
     )]
     pub overlay_bubble_size: i64,
+    /// Clear the PRIMARY selection once OpenReader has picked it up, so an
+    /// accidental middle click pastes nothing. Off by default: some
+    /// applications (e.g. Konsole) drop their visible highlight with it.
+    #[serde(default)]
+    pub clear_primary_after_capture: bool,
 }
 
 /// `tesseract` (default; external CLI, all installed languages incl. German)
@@ -378,6 +383,7 @@ impl Default for ReaderSettings {
             voice_profiles: default_voice_profiles(),
             ocr_engine: OcrEngineKind::Tesseract,
             overlay_bubble_size: Self::default_overlay_bubble_size(),
+            clear_primary_after_capture: false,
         }
     }
 }

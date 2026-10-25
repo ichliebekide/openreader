@@ -15,5 +15,8 @@ src-tauri/target/
 /Decompile/
 /Voice Pack/
 
+# Leftovers of the former Python backend (venv, caches)
+/backend/
+
 # Claude Code worktrees and local session state
 /.claude/

@@ -27,6 +27,10 @@ impl SelectionGuard {
         *self.settings.write().unwrap() = settings;
     }
 
+    pub fn clears_primary_after_capture(&self) -> bool {
+        self.settings.read().unwrap().clear_primary_after_capture
+    }
+
     pub fn accepts(&self, text: &str, context: &DesktopContextSnapshot) -> bool {
         self.check(text, context).is_ok()
     }
@@ -95,6 +99,16 @@ mod tests {
         settings.ignore_terminal_windows = false;
         guard.set_settings(settings);
         assert!(guard.accepts("Ein ganz normaler Satz.", &context(Some("konsole"))));
+    }
+
+    #[test]
+    fn clearing_primary_is_opt_in() {
+        let guard = SelectionGuard::new(ReaderSettings::default());
+        assert!(!guard.clears_primary_after_capture());
+        let mut settings = ReaderSettings::default();
+        settings.clear_primary_after_capture = true;
+        guard.set_settings(settings);
+        assert!(guard.clears_primary_after_capture());
     }
 
     #[test]
