@@ -266,10 +266,12 @@ fn SelectionSection() -> impl IntoView {
             .with(|s| s.as_ref().map(|s| s.ignore_terminal_windows).unwrap_or(true))
     });
     let disabled = move || state.settings.with(Option::is_none);
+    let source_note = Memo::new(move |_| state.health.with(|health| logic::selection_source_note(health.as_ref())));
 
     view! {
         <section class="section">
             <h3>"Auswahl"</h3>
+            {move || source_note.get().map(|note| view! { <p class="field-note selection-source">{note}</p> })}
             <label class="field inline">
                 <span>"Minimale Textlänge"</span>
                 <input

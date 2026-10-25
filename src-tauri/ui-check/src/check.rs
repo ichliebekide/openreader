@@ -361,6 +361,10 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     // Settings drawer: open, Escape, click outside.
     page.click("button[aria-label='Einstellungen']")?;
     page.wait("drawer open", "document.querySelector('.drawer.open')")?;
+    ensure!(
+        page.eval("document.querySelector('.selection-source') === null")? == serde_json::json!(true),
+        "selection source note shown although the source is not reported"
+    );
     page.screenshot("fokus-light-settings")?;
     page.tab.press_key("Escape")?;
     page.wait("drawer closed by Escape", "!document.querySelector('.drawer.open')")?;
@@ -386,9 +390,19 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     page.tab.press_key("Escape")?;
     page.wait("drawer closed (dark)", "!document.querySelector('.drawer.open')")?;
 
+    // Auswahl: without PRIMARY the drawer names the AT-SPI source quietly.
+    fixture
+        .app
+        .selection_status
+        .set(openreader_api::SelectionInput::Accessibility);
+
     // Dokumente: the OCR engine is a backend setting; saving it must not stop playback.
     page.click("button[aria-label='Einstellungen']")?;
     page.wait("drawer open (ocr)", "document.querySelector('.drawer.open')")?;
+    page.wait(
+        "selection source note",
+        "(document.querySelector('.selection-source') || {}).textContent?.startsWith('Markierung über Barrierefreiheit')",
+    )?;
     let ocr = page.eval("[...document.querySelectorAll('.ocr-select option')].map(o => o.textContent)")?;
     ensure!(
         ocr == serde_json::json!(["Tesseract", "ocrs (eingebaut)"]),

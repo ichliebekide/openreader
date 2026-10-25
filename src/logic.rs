@@ -1,6 +1,8 @@
 //! Pure UI logic (no DOM), unit-tested natively with `cargo test`.
 
-use openreader_api::{HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, TtsEngine, VoiceProfile};
+use openreader_api::{
+    HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, SelectionInput, TtsEngine, VoiceProfile,
+};
 
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8765";
 
@@ -325,6 +327,19 @@ impl Readiness {
     }
 }
 
+/// Quiet note in the "Auswahl" section, only when selections do not come
+/// from the PRIMARY selection as usual.
+pub fn selection_source_note(health: Option<&HealthResponse>) -> Option<&'static str> {
+    match health?.selection_input? {
+        SelectionInput::Accessibility => Some(
+            "Markierung über Barrierefreiheit (Mittelklick-Einfügen ist in KDE aus). \
+             Wo das nicht greift, hilft Kopieren mit Strg+C.",
+        ),
+        SelectionInput::Clipboard => Some("Nur kopierter Text (Strg+C) wird angeboten (Mittelklick-Einfügen ist in KDE aus)."),
+        SelectionInput::Primary | SelectionInput::Klipper | SelectionInput::Unavailable => None,
+    }
+}
+
 // ------------------------------------------------------------------ api base
 
 /// Accept an API base override only for loopback HTTP origins.
@@ -539,6 +554,26 @@ mod tests {
         assert_eq!(engine_option_label(TtsEngine::Edge), "Microsoft Seraphina");
         assert_eq!(Readiness::of(None).label(), "Backend nicht verbunden");
         assert_eq!(char_count("Grüße 😀"), 7);
+    }
+
+    #[test]
+    fn selection_source_note_only_without_primary() {
+        let health = |input| HealthResponse {
+            ok: true,
+            version: "0.1.0".into(),
+            engine: TtsEngine::Edge,
+            wayland_session: true,
+            backend: None,
+            selection_input: input,
+        };
+        assert_eq!(selection_source_note(None), None);
+        assert_eq!(selection_source_note(Some(&health(None))), None);
+        assert_eq!(selection_source_note(Some(&health(Some(SelectionInput::Primary)))), None);
+        let note = selection_source_note(Some(&health(Some(SelectionInput::Accessibility)))).unwrap();
+        assert!(note.starts_with("Markierung über Barrierefreiheit"));
+        assert!(selection_source_note(Some(&health(Some(SelectionInput::Clipboard))))
+            .unwrap()
+            .contains("Strg+C"));
     }
 
     #[test]
