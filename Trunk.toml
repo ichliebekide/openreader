@@ -5,7 +5,10 @@ target = "index.html"
 dist = "dist"
 
 [watch]
-ignore = ["./src-tauri", "./target", "./dist", "./docs", "./scripts"]
+# Only the UI sources: anything else in the repository (logs, docs, the Tauri
+# shell, which `cargo tauri dev` watches itself) must not rebuild and reload
+# the running windows, or the overlay bubble vanishes right after it appears.
+watch = ["./src", "./styles", "./index.html", "./Cargo.toml", "./src-tauri/api-types/src"]
 
 [serve]
 addresses = ["127.0.0.1"]
