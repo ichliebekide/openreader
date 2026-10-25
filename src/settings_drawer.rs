@@ -3,11 +3,11 @@
 
 use leptos::ev;
 use leptos::prelude::*;
-use openreader_api::{OcrEngineKind, ReaderSettings, TtsEngine};
+use openreader_api::{parse_hex_color, OcrEngineKind, ReaderSettings, TtsEngine};
 use wasm_bindgen::JsCast;
 
 use crate::icons::{self, Icon};
-use crate::logic::{self, Theme};
+use crate::logic::{self, BubbleColor, Theme};
 use crate::state::{AppState, ExportState};
 
 fn input_value(event: &ev::Event) -> String {
@@ -389,6 +389,33 @@ fn AppearanceSection() -> impl IntoView {
             .settings
             .with(|s| s.as_ref().map(ReaderSettings::overlay_bubble_px).unwrap_or(48))
     });
+    let accent = Memo::new(move |_| state.settings.with(|s| s.as_ref().and_then(|s| s.accent_color.clone())));
+    let bubble_choice = Memo::new(move |_| {
+        state
+            .settings
+            .with(|s| s.as_ref().map(BubbleColor::of).unwrap_or(BubbleColor::Text))
+    });
+    let bubble_custom = Memo::new(move |_| {
+        state.settings.with(|s| {
+            s.as_ref()
+                .and_then(|s| s.bubble_color.clone())
+                .filter(|color| parse_hex_color(color).is_some())
+                .unwrap_or_else(|| "#4a8fdc".to_string())
+        })
+    });
+    let disabled = move || state.settings.with(Option::is_none);
+    let set_accent = move |color: Option<String>| {
+        state.update_settings(move |mut settings| {
+            settings.accent_color = color;
+            settings
+        })
+    };
+    let set_bubble = move |color: Option<String>| {
+        state.update_settings(move |mut settings| {
+            settings.bubble_color = color;
+            settings
+        })
+    };
     view! {
         <section class="section">
             <h3>"Darstellung"</h3>
@@ -407,6 +434,86 @@ fn AppearanceSection() -> impl IntoView {
                         }
                     })
                     .collect_view()}
+            </div>
+            <div class="field">
+                <span>"Akzentfarbe"</span>
+                <div class="swatches" role="group" aria-label="Akzentfarbe">
+                    {logic::ACCENT_PRESETS
+                        .into_iter()
+                        .map(|(name, color)| {
+                            let value = color.map(str::to_string);
+                            let pressed = value.clone();
+                            view! {
+                                <button
+                                    class="swatch"
+                                    title=name
+                                    aria-label=name
+                                    disabled=disabled
+                                    aria-pressed=move || (accent.get() == pressed).to_string()
+                                    style:background=logic::preset_swatch(color)
+                                    on:click=move |_| set_accent(value.clone())
+                                ></button>
+                            }
+                        })
+                        .collect_view()}
+                    <label class="swatch custom" title="Eigene Farbe">
+                        <input
+                            class="accent-picker"
+                            type="color"
+                            aria-label="Eigene Akzentfarbe"
+                            disabled=disabled
+                            prop:value=move || accent.get().unwrap_or_else(|| "#d98e2b".to_string())
+                            on:input=move |event| {
+                                let color = input_value(&event);
+                                if parse_hex_color(&color).is_some() {
+                                    set_accent(Some(color));
+                                }
+                            }
+                        />
+                    </label>
+                </div>
+            </div>
+            <div class="field">
+                <span>"Farbe von Vorlese-Blase und Abspielknopf"</span>
+                <div class="bubble-color-row">
+                    <div class="segmented" role="group" aria-label="Farbe der Vorlese-Blase">
+                        {BubbleColor::ALL
+                            .into_iter()
+                            .map(|choice| {
+                                view! {
+                                    <button
+                                        class="segment"
+                                        disabled=disabled
+                                        aria-pressed=move || (bubble_choice.get() == choice).to_string()
+                                        on:click=move |_| set_bubble(match choice {
+                                            BubbleColor::Text => None,
+                                            BubbleColor::Accent => Some("accent".to_string()),
+                                            BubbleColor::Custom => Some(bubble_custom.get_untracked()),
+                                        })
+                                    >
+                                        {choice.label()}
+                                    </button>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                    <Show when=move || bubble_choice.get() == BubbleColor::Custom>
+                        <label class="swatch custom" title="Eigene Blasenfarbe">
+                            <input
+                                class="bubble-picker"
+                                type="color"
+                                aria-label="Eigene Blasenfarbe"
+                                prop:value=move || bubble_custom.get()
+                                on:input=move |event| {
+                                    let color = input_value(&event);
+                                    if parse_hex_color(&color).is_some() {
+                                        set_bubble(Some(color));
+                                    }
+                                }
+                            />
+                        </label>
+                    </Show>
+                </div>
             </div>
             <label class="field range">
                 <span class="range-label">

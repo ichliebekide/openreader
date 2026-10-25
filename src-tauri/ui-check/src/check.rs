@@ -443,6 +443,23 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
         ensure!(Instant::now() < deadline, "clear-after-capture not saved");
         std::thread::sleep(Duration::from_millis(50));
     }
+
+    // Darstellung: accent preset and bubble colour apply live and are saved.
+    page.click("button.swatch[aria-label='Blau']")?;
+    page.click(".bubble-color-row button.segment:nth-child(2)")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let settings = fixture.app.settings();
+        if settings.accent_color.as_deref() == Some("#4a8fdc") && settings.bubble_color.is_some() {
+            break;
+        }
+        ensure!(Instant::now() < deadline, "colours not saved: {:?} {:?}", settings.accent_color, settings.bubble_color);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let accent = page.text("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")?;
+    ensure!(accent == "#4a8fdc", "accent property {accent}");
+    page.eval("document.querySelector('.bubble-color-row').scrollIntoView(), true")?;
+    page.screenshot("fokus-dark-colours")?;
     page.eval("document.querySelector('.drawer-body').scrollTop = 1e6, true")?;
     page.screenshot("fokus-dark-settings-lower")?;
     page.tab.press_key("Escape")?;

@@ -309,6 +309,25 @@ pub struct ReaderSettings {
     /// applications (e.g. Konsole) drop their visible highlight with it.
     #[serde(default)]
     pub clear_primary_after_capture: bool,
+    /// Accent colour (`#rrggbb`) for progress, highlight and controls;
+    /// `None` = the built-in amber.
+    #[serde(default)]
+    pub accent_color: Option<String>,
+    /// Overlay bubble colour: `None` = text colour, `"accent"` = accent
+    /// colour, or `#rrggbb`.
+    #[serde(default)]
+    pub bubble_color: Option<String>,
+}
+
+/// `#rrggbb` as RGB; anything else (including shorthand) is rejected so
+/// stored values can be used in CSS safely.
+pub fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+    Some((channel(0)?, channel(2)?, channel(4)?))
 }
 
 /// `tesseract` (default; external CLI, all installed languages incl. German)
@@ -384,6 +403,8 @@ impl Default for ReaderSettings {
             ocr_engine: OcrEngineKind::Tesseract,
             overlay_bubble_size: Self::default_overlay_bubble_size(),
             clear_primary_after_capture: false,
+            accent_color: None,
+            bubble_color: None,
         }
     }
 }
@@ -604,6 +625,14 @@ mod tests {
         assert_eq!(profile.engine, TtsEngine::Edge);
         assert_eq!(profile.edge_voice.as_deref(), Some("de-DE-SeraphinaMultilingualNeural"));
         assert_eq!(profile.language, "German");
+    }
+
+    #[test]
+    fn hex_colors_are_strict() {
+        assert_eq!(parse_hex_color("#3fa66B"), Some((0x3f, 0xa6, 0x6b)));
+        for bad in ["3fa66b", "#3fa", "#3fa66g", "#3fa66b0", "red", "#3fa66b; x"] {
+            assert_eq!(parse_hex_color(bad), None, "{bad}");
+        }
     }
 
     #[test]

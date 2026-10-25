@@ -1,7 +1,8 @@
 //! Pure UI logic (no DOM), unit-tested natively with `cargo test`.
 
 use openreader_api::{
-    HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, SelectionInput, TtsEngine, VoiceProfile,
+    parse_hex_color, HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, SelectionInput, TtsEngine,
+    VoiceProfile,
 };
 
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8765";
@@ -419,9 +420,128 @@ impl Theme {
     }
 }
 
+// ------------------------------------------------------------------ colours
+
+/// Accent presets for the settings drawer. `None` is the built-in amber,
+/// which has its own light and dark variants in the stylesheet.
+pub const ACCENT_PRESETS: [(&str, Option<&str>); 7] = [
+    ("Bernstein", None),
+    ("Blau", Some("#4a8fdc")),
+    ("Türkis", Some("#2aa198")),
+    ("Grün", Some("#3fa66b")),
+    ("Violett", Some("#8b6fd6")),
+    ("Rosa", Some("#d65a8a")),
+    ("Rot", Some("#d9534f")),
+];
+
+/// Swatch colour shown for a preset (the amber default as seen in light mode).
+pub fn preset_swatch(color: Option<&str>) -> &str {
+    color.unwrap_or("#d98e2b")
+}
+
+/// Bubble colour choice in the settings drawer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BubbleColor {
+    Text,
+    Accent,
+    Custom,
+}
+
+impl BubbleColor {
+    pub const ALL: [BubbleColor; 3] = [BubbleColor::Text, BubbleColor::Accent, BubbleColor::Custom];
+
+    pub fn of(settings: &ReaderSettings) -> Self {
+        match settings.bubble_color.as_deref() {
+            None => BubbleColor::Text,
+            Some("accent") => BubbleColor::Accent,
+            Some(_) => BubbleColor::Custom,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BubbleColor::Text => "Standard",
+            BubbleColor::Accent => "Akzent",
+            BubbleColor::Custom => "Eigene",
+        }
+    }
+}
+
+/// Readable text colour (`--text` light/dark tones) on top of `#rrggbb`.
+pub fn contrast_on(hex: &str) -> &'static str {
+    let Some((r, g, b)) = parse_hex_color(hex) else {
+        return "#1d1c1a";
+    };
+    let linear = |channel: u8| {
+        let c = channel as f64 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+    // Pick the side with the better WCAG contrast ratio.
+    let dark = (luminance + 0.05) / (0.0119 + 0.05);
+    let light = (0.955 + 0.05) / (luminance + 0.05);
+    if dark >= light { "#1d1c1a" } else { "#fafaf8" }
+}
+
+/// Inline CSS custom properties for the colour settings. `Some(value)` sets
+/// the property on `<html>`, `None` removes it (stylesheet default).
+pub fn color_properties(settings: Option<&ReaderSettings>) -> Vec<(&'static str, Option<String>)> {
+    let accent = settings
+        .and_then(|settings| settings.accent_color.as_deref())
+        .filter(|color| parse_hex_color(color).is_some());
+    let mut properties = vec![
+        ("--accent", accent.map(str::to_string)),
+        ("--accent-soft", accent.map(|c| format!("color-mix(in srgb, {c} 28%, transparent)"))),
+        ("--focus", accent.map(|c| format!("color-mix(in srgb, {c} 55%, transparent)"))),
+    ];
+    let bubble = match settings.and_then(|settings| settings.bubble_color.as_deref()) {
+        Some("accent") => Some(match accent {
+            Some(color) => (color.to_string(), contrast_on(color)),
+            // The default amber in both modes reads best with dark text.
+            None => ("var(--accent)".to_string(), "#1d1c1a"),
+        }),
+        Some(color) if parse_hex_color(color).is_some() => Some((color.to_string(), contrast_on(color))),
+        _ => None,
+    };
+    properties.push(("--bubble-bg", bubble.as_ref().map(|(bg, _)| bg.clone())));
+    properties.push(("--bubble-fg", bubble.map(|(_, fg)| fg.to_string())));
+    properties
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_settings_become_css_properties() {
+        let mut settings = ReaderSettings::default();
+        let unset = color_properties(Some(&settings));
+        assert!(unset.iter().all(|(_, value)| value.is_none()));
+
+        settings.accent_color = Some("#4a8fdc".into());
+        settings.bubble_color = Some("accent".into());
+        let props: std::collections::HashMap<_, _> = color_properties(Some(&settings)).into_iter().collect();
+        assert_eq!(props["--accent"].as_deref(), Some("#4a8fdc"));
+        assert_eq!(props["--accent-soft"].as_deref(), Some("color-mix(in srgb, #4a8fdc 28%, transparent)"));
+        assert_eq!(props["--bubble-bg"].as_deref(), Some("#4a8fdc"));
+
+        settings.bubble_color = Some("#ffffff".into());
+        let props: std::collections::HashMap<_, _> = color_properties(Some(&settings)).into_iter().collect();
+        assert_eq!(props["--bubble-fg"].as_deref(), Some("#1d1c1a"));
+
+        // Invalid stored values fall back to the stylesheet defaults.
+        settings.accent_color = Some("red; background: url(x)".into());
+        settings.bubble_color = Some("blue".into());
+        assert!(color_properties(Some(&settings)).iter().all(|(_, value)| value.is_none()));
+    }
+
+    #[test]
+    fn contrast_picks_readable_text() {
+        assert_eq!(contrast_on("#000000"), "#fafaf8");
+        assert_eq!(contrast_on("#ffffff"), "#1d1c1a");
+        assert_eq!(contrast_on("#2c3e8c"), "#fafaf8");
+        assert_eq!(contrast_on("#e3a44f"), "#1d1c1a");
+    }
 
     fn state(revision: i64, session: &str, speaking: bool, word: Option<(i64, i64)>) -> PlaybackState {
         PlaybackState {

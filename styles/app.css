@@ -321,8 +321,8 @@ button:disabled {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: var(--on-text);
-  background: var(--text);
+  color: var(--bubble-fg, var(--on-text));
+  background: var(--bubble-bg, var(--text));
   transition: transform 120ms ease, opacity 120ms ease;
 }
 
@@ -667,6 +667,51 @@ input[type="range"] {
   color: var(--danger);
 }
 
+/* Colour choices: round swatches, the last one opens the system colour picker. */
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  border: 0.5px solid var(--line-strong);
+  cursor: pointer;
+  position: relative;
+}
+
+.swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text);
+}
+
+.swatch.custom {
+  overflow: hidden;
+  background: conic-gradient(#d9534f, #d98e2b, #3fa66b, #2aa198, #4a8fdc, #8b6fd6, #d65a8a, #d9534f);
+}
+
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.bubble-color-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bubble-color-row .segmented {
+  flex: 1;
+}
+
 /* Live preview of the overlay button next to its size slider. */
 .bubble-size-row {
   display: flex;
@@ -690,8 +735,8 @@ input[type="range"] {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: var(--on-text);
-  background: var(--text);
+  color: var(--bubble-fg, var(--on-text));
+  background: var(--bubble-bg, var(--text));
   box-shadow: var(--bubble-shadow);
 }
 
@@ -720,8 +765,8 @@ input[type="range"] {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: var(--on-text);
-  background: var(--text);
+  color: var(--bubble-fg, var(--on-text));
+  background: var(--bubble-bg, var(--text));
   box-shadow: var(--bubble-shadow);
   transition: transform 120ms ease;
 }

@@ -18,6 +18,8 @@ pub fn MainApp() -> impl IntoView {
     let state = AppState::new();
     state.start();
     provide_context(state);
+    // Live colours: the drawer edits the settings signal before saving.
+    Effect::new(move |_| state.settings.with(|settings| crate::state::apply_colors(settings.as_ref())));
 
     let _escape = window_event_listener(ev::keydown, move |event| {
         if event.key() == "Escape" && state.drawer_open.get_untracked() {

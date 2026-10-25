@@ -8,6 +8,8 @@ use openreader_api::{
     HealthResponse, PlaybackState, ReaderEvent, ReaderSettings, SelectionEvent, TtsStatusResponse, VoiceProfile,
 };
 
+use wasm_bindgen::JsCast;
+
 use crate::api;
 use crate::logic::{self, PlaybackModel, Theme};
 use crate::tauri;
@@ -411,6 +413,24 @@ impl AppState {
         if let Some(storage) = local_storage() {
             let _ = storage.set_item(THEME_KEY, theme.as_str());
         }
+    }
+}
+
+/// Colour settings as inline custom properties on `<html>` (inline styles win
+/// over the light/dark rules of the stylesheet).
+pub fn apply_colors(settings: Option<&ReaderSettings>) {
+    let Some(root) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.document_element())
+    else {
+        return;
+    };
+    let style = root.unchecked_ref::<web_sys::HtmlElement>().style();
+    for (property, value) in logic::color_properties(settings) {
+        let _ = match value {
+            Some(value) => style.set_property(property, &value),
+            None => style.remove_property(property).map(|_| ()),
+        };
     }
 }
 

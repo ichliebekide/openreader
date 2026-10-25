@@ -47,9 +47,20 @@ pub fn OverlayApp() -> impl IntoView {
         }
     }));
 
+    // The bubble colour lives in the settings; refresh it whenever the bubble shows.
+    let refresh_colors = || {
+        spawn_local(async {
+            if let Ok(settings) = api::settings().await {
+                crate::state::apply_colors(Some(&settings));
+            }
+        })
+    };
+    refresh_colors();
+
     spawn_local(tauri::listen_bool("overlay-visibility", move |shown| {
         visible.set(shown);
         if shown {
+            refresh_colors();
             // Enable the input region only once the shown frame is painted.
             request_animation_frame(move || {
                 request_animation_frame(move || {
