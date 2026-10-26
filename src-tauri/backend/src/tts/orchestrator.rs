@@ -57,8 +57,8 @@ pub struct TtsOrchestrator {
 }
 
 fn default_player_factory() -> PlayerFactory {
-    // One cpal player for every engine; only Edge delivers word timings, so
-    // Piper simply reports no words.
+    // One cpal player for every engine. Edge reports word timings from the
+    // service, Piper estimates them per sentence (tts/piper/timing.rs).
     Arc::new(|_engine, on_progress| {
         let callback = on_progress.unwrap_or_else(|| Arc::new(|_| {}));
         Arc::new(ClockedAudioPlayer::new(callback)) as Arc<dyn Player>

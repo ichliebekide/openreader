@@ -7,6 +7,7 @@
 //! previous sentence is already playing.
 
 pub mod espeak;
+pub mod timing;
 pub mod voice;
 
 use std::path::PathBuf;
@@ -74,19 +75,34 @@ impl Engine for PiperEngine {
             let voice = tokio::task::spawn_blocking(move || load_voice(&loading)).await??;
             let synthesis = synthesis_config(&profile);
             let sample_rate = voice.config.audio.sample_rate;
-            let spoken = apply_pronunciations(text.trim());
-            for line in split_sentences(&spoken, 420)? {
-                let phonemizer = voice.clone();
-                let sentences = tokio::task::spawn_blocking(move || phonemizer.config.phonemize(&line)).await??;
-                for phonemes in sentences {
-                    if phonemes.is_empty() {
-                        continue;
+            // Lines are cut from the request text itself so that word offsets
+            // point into what the UI shows; pronunciation rules apply per line.
+            let mut cursor = 0;
+            let mut elapsed = 0.0;
+            for line in split_sentences(&text, 420)? {
+                let line_words = match text[cursor..].find(line.as_str()) {
+                    Some(found) => {
+                        let at = cursor + found;
+                        cursor = at + line.len();
+                        timing::words_in(&line, text[..at].encode_utf16().count() as i64)
                     }
+                    None => Vec::new(),
+                };
+                let spoken = apply_pronunciations(&line);
+                let phonemizer = voice.clone();
+                let sentences = tokio::task::spawn_blocking(move || phonemizer.config.phonemize(&spoken)).await??;
+                let sentences: Vec<_> = sentences.into_iter().filter(|phonemes| !phonemes.is_empty()).collect();
+                let counts: Vec<usize> = sentences.iter().map(|phonemes| timing::spoken_words(phonemes)).collect();
+                let parts = timing::allocate(&line_words, &counts);
+                for (phonemes, words) in sentences.into_iter().zip(parts) {
                     let inference = voice.clone();
                     let config = synthesis.clone();
                     let pcm = tokio::task::spawn_blocking(move || inference.sentence_to_pcm(&phonemes, &config)).await??;
+                    let duration = pcm.len() as f64 / sample_rate as f64;
+                    let timings = timing::spread(words, elapsed, duration);
+                    elapsed += duration;
                     let bytes: Vec<u8> = pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect();
-                    yield AudioChunk::raw(bytes, sample_rate);
+                    yield AudioChunk::raw(bytes, sample_rate).with_words(timings);
                 }
             }
         })
@@ -218,12 +234,18 @@ mod tests {
             let mut stream = PiperEngine.synthesize("Hallo, das ist OpenReader mit Piper.".into(), profile.clone());
             let mut bytes = 0;
             let mut first = None;
+            let mut words = Vec::new();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.unwrap();
                 assert_eq!(chunk.sample_rate, output_sample_rate(&profile));
                 first.get_or_insert(started.elapsed());
                 bytes += chunk.data.len();
+                words.extend(chunk.words);
             }
+            // Every written word gets an estimated time, in order.
+            let ranges: Vec<_> = words.iter().map(|word| (word.start, word.end)).collect();
+            assert_eq!(ranges, [(0, 6), (7, 10), (11, 14), (15, 25), (26, 29), (30, 36)], "{}", profile.id);
+            assert!(words.windows(2).all(|pair| pair[0].offset < pair[1].offset));
             let rate = output_sample_rate(&profile);
             let seconds = bytes as f64 / 2.0 / rate as f64;
             eprintln!(

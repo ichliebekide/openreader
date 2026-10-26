@@ -87,9 +87,15 @@ Die API wartet zusaetzlich auf die Bereinigung der jeweiligen Engine.
   Service-Woerter erhalten keine erfundenen Positionen. Die GUI markiert nur im
   unveraenderlichen Text der laufenden Anfrage, scrollt nur das Lesefeld und
   setzt keinen Fokus. Nach Stop/Ende wird wieder die aktuelle Auswahl angezeigt.
-- Wortmarkierung fuer Microsoft/Seraphina. Piper liefert im vorhandenen
-  Adapter keine belastbaren Wort-Zeitmarken; deshalb dort keine
-  vorgetaeuschte Markierung anhand von Wortlaenge oder Netzempfangszeit.
+- Wortmarkierung fuer Microsoft/Seraphina mit echten Zeitmarken des Dienstes.
+  Piper-Modelle liefern nur Audio, deshalb wird dort geschaetzt
+  (`tts/piper/timing.rs`): Die Dauer jedes synthetisierten Satzes wird auf
+  seine Woerter verteilt, gewichtet nach Wortlaenge plus Pausen nach
+  Satzzeichen; die Woerter einer Zeile werden anteilig nach den gesprochenen
+  Woertern (Phonemgruppen) auf die Saetze verteilt. Die Schaetzung setzt an
+  jeder Satzgrenze neu an, kann also nur innerhalb eines Satzes leicht vor-
+  oder nachgehen. Fortschrittsleiste und Markierung funktionieren damit auch,
+  wenn Piper nach einem Seraphina-Ausfall einspringt.
 - Kleine Puffer koennen kurze Schwankungen abfedern. Gegen eine laengere
   Synthese-/Netzpause braucht es mehr Vorlauf oder schnellere Erzeugung;
   sofortiger Start, kein Vorlauf und garantiert lueckenlose Online-Ausgabe
