@@ -432,3 +432,53 @@ fn background_server_serves_and_shuts_down() {
     handle.shutdown();
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
 }
+
+async fn status_with(app: &Arc<ReaderApp>, method: &str, uri: &str, headers: &[(&str, &str)]) -> StatusCode {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    router(app.clone()).oneshot(request.body(Body::empty()).unwrap()).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn foreign_hosts_and_origins_are_rejected() {
+    let (app, _tts, _dir) = prepare();
+    for host in ["127.0.0.1:8765", "localhost:8765", "[::1]:8765", "LOCALHOST", "127.0.0.1"] {
+        assert_eq!(status_with(&app, "GET", "/api/health", &[("host", host)]).await, StatusCode::OK, "{host}");
+    }
+    // DNS rebinding: a foreign name that resolves to 127.0.0.1.
+    for host in ["evil.example:8765", "evil.example", "127.0.0.1.evil.example:8765", "[::2]:8765", "localhost:x"] {
+        assert_eq!(status_with(&app, "GET", "/api/health", &[("host", host)]).await, StatusCode::FORBIDDEN, "{host}");
+    }
+    // A foreign web page, also for the event stream (browsers don't apply CORS to WebSockets).
+    let foreign = [("host", "127.0.0.1:8765"), ("origin", "https://evil.example")];
+    assert_eq!(status_with(&app, "GET", "/api/health", &foreign).await, StatusCode::FORBIDDEN);
+    let upgrade = [
+        ("host", "127.0.0.1:8765"),
+        ("origin", "https://evil.example"),
+        ("connection", "upgrade"),
+        ("upgrade", "websocket"),
+        ("sec-websocket-version", "13"),
+        ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+    ];
+    assert_eq!(status_with(&app, "GET", "/ws/events", &upgrade).await, StatusCode::FORBIDDEN);
+    assert_eq!(status_with(&app, "GET", "/api/health", &[("origin", "null")]).await, StatusCode::FORBIDDEN);
+    // Our own UI.
+    for origin in ["tauri://localhost", "http://tauri.localhost", "http://127.0.0.1:1420"] {
+        assert_eq!(status_with(&app, "GET", "/api/health", &[("origin", origin)]).await, StatusCode::OK, "{origin}");
+    }
+}
+
+#[tokio::test]
+async fn export_only_writes_wav_files() {
+    let (app, _tts, dir) = prepare();
+    let target = dir.path().join(".bashrc");
+    let body = serde_json::json!({"text": "Hallo", "export_path": target});
+    let (status, response) = call(&app, "POST", "/api/export", Some(body)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(response["detail"].as_str().unwrap().contains(".wav"));
+    let wav = dir.path().join("Vorlesen.WAV");
+    let (status, _) = call(&app, "POST", "/api/export", Some(serde_json::json!({"text": "Hallo", "export_path": wav}))).await;
+    assert_eq!(status, StatusCode::OK);
+}

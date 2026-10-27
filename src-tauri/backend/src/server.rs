@@ -12,7 +12,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Multipart, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::extract::Request;
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -436,6 +438,16 @@ async fn export(State(app): AppState, Json(request): Json<SpeakRequest>) -> Resu
         .export_path
         .clone()
         .unwrap_or_else(|| crate::home_dir().join("OpenReader.wav"));
+    // Export never overwrites anything but a WAV file.
+    if !output
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+    {
+        return Err(ApiFailure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Der Export ist nur als .wav-Datei moeglich.".into(),
+        ));
+    }
     let path = app
         .tts()
         .export_wav(&request.text, &output, request.profile_id.as_deref())
@@ -522,22 +534,69 @@ async fn forward_events(app: Arc<ReaderApp>, mut socket: WebSocket) {
     }
 }
 
-fn cors() -> CorsLayer {
+/// Origins of the OpenReader UI (Tauri, Trunk dev server) or another local page.
+fn is_allowed_origin(origin: &str) -> bool {
     const ORIGINS: [&str; 4] = [
         "http://127.0.0.1:1420",
         "http://localhost:1420",
         "http://tauri.localhost",
         "tauri://localhost",
     ];
+    ORIGINS.contains(&origin) || is_local_origin(origin)
+}
+
+fn cors() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-            let Ok(origin) = origin.to_str() else {
-                return false;
-            };
-            ORIGINS.contains(&origin) || is_local_origin(origin)
+            origin.to_str().is_ok_and(is_allowed_origin)
         }))
         .allow_methods(AllowMethods::mirror_request())
         .allow_headers(AllowHeaders::mirror_request())
+}
+
+/// CORS only keeps foreign pages from reading responses: browsers apply it
+/// neither to WebSockets nor to "simple" requests, and a page can point its
+/// own domain at 127.0.0.1 (DNS rebinding). So every request must be addressed
+/// to a loopback name, and a browser-declared origin must be one of ours.
+async fn guard_local(request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let host_ok = headers
+        .get(header::HOST)
+        .is_none_or(|host| host.to_str().is_ok_and(is_loopback_host));
+    let origin_ok = headers
+        .get(header::ORIGIN)
+        .is_none_or(|origin| origin.to_str().is_ok_and(is_allowed_origin));
+    if !host_ok || !origin_ok {
+        tracing::warn!(
+            "rejected request from host {:?}, origin {:?}",
+            headers.get(header::HOST),
+            headers.get(header::ORIGIN)
+        );
+        let detail = "Nur die lokale OpenReader-Oberflaeche darf diese Schnittstelle nutzen.".to_string();
+        return (StatusCode::FORBIDDEN, Json(ApiError { detail })).into_response();
+    }
+    next.run(request).await
+}
+
+/// `127.0.0.1`, `localhost` or `[::1]`, with an optional port.
+fn is_loopback_host(host: &str) -> bool {
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((name, port)) if port.is_empty() || port.strip_prefix(':').is_some_and(is_port) => return name == "::1",
+            _ => return false,
+        }
+    } else {
+        match host.split_once(':') {
+            Some((name, port)) if is_port(port) => name,
+            Some(_) => return false,
+            None => host,
+        }
+    };
+    matches!(name.to_ascii_lowercase().as_str(), "127.0.0.1" | "localhost")
+}
+
+fn is_port(port: &str) -> bool {
+    !port.is_empty() && port.len() <= 5 && port.chars().all(|ch| ch.is_ascii_digit())
 }
 
 /// `^https?://(127\.0\.0\.1|localhost)(:\d+)?$`
@@ -573,6 +632,7 @@ pub fn router(app: Arc<ReaderApp>) -> Router {
         )
         .route("/ws/events", get(events))
         .layer(cors())
+        .layer(middleware::from_fn(guard_local))
         .with_state(app)
 }
 
