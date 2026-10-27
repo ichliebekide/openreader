@@ -28,6 +28,11 @@ Erste veröffentlichte Version.
   und notfalls über Strg+C.
 - Oberfläche „Fokus“ in Rust (Leptos), hell, dunkel oder nach System,
   anpassbare Akzent- und Blasenfarbe, einstellbare Blasengröße.
+- Rahmenloses Fenster mit eigenen Knöpfen (Minimieren, Maximieren,
+  Schließen in die Leiste), Doppelklick auf die Kopfzeile, Größe an den
+  Rändern ziehbar; Symbol in der Systemleiste.
+- Auswahlen in Terminals werden ignoriert (abschaltbar), u. a. Konsole,
+  Ptyxis, GNOME Console, Kitty, Alacritty, Ghostty, WezTerm, Foot, Tilix.
 - Optional: Markierung nach dem Erfassen leeren, gegen versehentliches
   Einfügen mit der mittleren Maustaste.
 - Hinweis auf neue Versionen (einmal täglich, abschaltbar).
