@@ -539,6 +539,29 @@ pub struct FallbackEvent {
     pub created_at: DateTime<Utc>,
 }
 
+/// A downloadable Piper voice (`GET /api/voices/piper`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PiperVoiceStatus {
+    /// Piper voice name, e.g. `de_DE-thorsten-medium`.
+    pub voice_id: String,
+    pub label: String,
+    /// Model and config are on disk.
+    pub installed: bool,
+    pub downloading: bool,
+    /// `0.0..=1.0` while downloading, if the size is known.
+    #[serde(default)]
+    pub progress: Option<f64>,
+    /// Why the last download failed.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `POST /api/voices/piper/download`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VoiceDownloadRequest {
+    pub voice_id: String,
+}
+
 /// A published OpenReader release newer than the running version.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReleaseInfo {

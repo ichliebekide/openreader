@@ -5,8 +5,8 @@ use std::time::Duration;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use openreader_api::{
-    HealthResponse, PlaybackState, ReaderEvent, ReaderSettings, SelectionEvent, TtsStatusResponse, UpdateInfo,
-    VoiceProfile,
+    HealthResponse, PiperVoiceStatus, PlaybackState, ReaderEvent, ReaderSettings, SelectionEvent, TtsStatusResponse,
+    UpdateInfo, VoiceProfile,
 };
 
 use wasm_bindgen::JsCast;
@@ -68,6 +68,8 @@ pub struct AppState {
     /// Result of the backend's last update check.
     pub update: RwSignal<Option<UpdateInfo>>,
     pub update_checking: RwSignal<bool>,
+    /// Downloadable Piper voices and their install/download state.
+    pub piper_voices: RwSignal<Vec<PiperVoiceStatus>>,
     pub settings: RwSignal<Option<ReaderSettings>>,
     pub tts_status: RwSignal<Option<TtsStatusResponse>>,
     pub save_state: RwSignal<SaveState>,
@@ -98,6 +100,7 @@ impl AppState {
             health: RwSignal::new(None),
             update: RwSignal::new(None),
             update_checking: RwSignal::new(false),
+            piper_voices: RwSignal::new(Vec::new()),
             settings: RwSignal::new(None),
             tts_status: RwSignal::new(None),
             save_state: RwSignal::new(SaveState::Idle),
@@ -154,6 +157,14 @@ impl AppState {
         });
     }
 
+    pub fn download_voice(self, voice_id: String) {
+        spawn_local(async move {
+            if let Ok(voices) = api::download_piper_voice(&voice_id).await {
+                self.piper_voices.set(voices);
+            }
+        });
+    }
+
     /// "Jetzt pruefen" in the settings drawer.
     pub fn check_update(self) {
         self.update_checking.set(true);
@@ -169,6 +180,17 @@ impl AppState {
         spawn_local(async move {
             self.health.set(api::health().await.ok());
         });
+        // The voice list is only shown in the drawer; poll it there and while
+        // a download runs (also right after start, when the list is empty).
+        let voices_needed = self.drawer_open.get_untracked()
+            || self.piper_voices.with_untracked(|voices| voices.is_empty() || voices.iter().any(|voice| voice.downloading));
+        if voices_needed {
+            spawn_local(async move {
+                if let Ok(voices) = api::piper_voices().await {
+                    self.piper_voices.set(voices);
+                }
+            });
+        }
         spawn_local(async move {
             self.tts_status.set(api::tts_status().await.ok());
         });

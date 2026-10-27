@@ -23,6 +23,7 @@ pub mod settings;
 pub mod text;
 pub mod tts;
 pub mod update;
+pub mod voices;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

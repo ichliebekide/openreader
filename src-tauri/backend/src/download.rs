@@ -8,6 +8,16 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 pub fn download_file(url: &str, target: &Path) -> Result<()> {
+    download_file_with_progress(url, target, &mut |_, _| {})
+}
+
+/// Like [`download_file`]; `progress(received, total)` is called after every
+/// block (`total` from Content-Length, if the server sends one).
+pub fn download_file_with_progress(
+    url: &str,
+    target: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -29,6 +39,7 @@ pub fn download_file(url: &str, target: &Path) -> Result<()> {
         }
         file.write_all(&buffer[..count])?;
         written += count as u64;
+        progress(written, expected);
     }
     file.flush()?;
     drop(file);

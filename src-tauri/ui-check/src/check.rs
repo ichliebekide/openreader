@@ -527,6 +527,15 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
     ensure!(pill == "Sicherheitsupdate 9.9.9", "update pill {pill:?}");
     page.click("button[aria-label='Einstellungen']")?;
     page.wait("about section", "document.querySelector('.update-status.available')")?;
+    // Piper voices: one row per downloadable voice, each installed or loadable.
+    page.wait("voice list", "document.querySelectorAll('.voice-row').length === 6")?;
+    let rows_ok = page.eval(
+        "[...document.querySelectorAll('.voice-row')].every(r => \
+           r.querySelector('.voice-state.installed') || r.querySelector('.voice-download'))",
+    )?;
+    ensure!(rows_ok == Value::Bool(true), "voice rows without state or download button");
+    page.eval("document.querySelector('.voice-list').scrollIntoView(), true")?;
+    page.screenshot("fokus-voices")?;
     let status = page.text("document.querySelector('.update-status').textContent")?;
     ensure!(status == "Sicherheitsupdate: Version 9.9.9 ist verfügbar", "update status {status:?}");
     page.eval("document.querySelector('.about-section').scrollIntoView(), true")?;

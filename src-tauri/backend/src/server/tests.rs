@@ -503,3 +503,21 @@ async fn update_endpoints_report_the_last_check() {
     assert_eq!(info["available"]["security"], true);
     assert_eq!(call(&app, "GET", "/api/update", None).await.1["available"]["version"], "9.9.9");
 }
+
+#[tokio::test]
+async fn piper_voices_are_listed_and_unknown_ones_rejected() {
+    let (app, _tts, _dir) = prepare();
+    let (status, voices) = call(&app, "GET", "/api/voices/piper", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let voices = voices.as_array().unwrap();
+    assert_eq!(voices.len(), crate::tts::piper::DEFAULT_VOICES.len());
+    assert!(voices.iter().any(|voice| voice["voice_id"] == crate::voices::FALLBACK_VOICE));
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/voices/piper/download",
+        Some(serde_json::json!({"voice_id": "../../etc/passwd"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

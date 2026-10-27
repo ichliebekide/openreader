@@ -1,8 +1,8 @@
 //! Pure UI logic (no DOM), unit-tested natively with `cargo test`.
 
 use openreader_api::{
-    parse_hex_color, HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, SelectionInput, TtsEngine,
-    UpdateInfo, VoiceProfile,
+    parse_hex_color, HealthResponse, OcrEngineKind, PiperVoiceStatus, PlaybackState, ReaderSettings, SelectionInput,
+    TtsEngine, UpdateInfo, VoiceProfile,
 };
 
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8765";
@@ -420,6 +420,24 @@ impl Theme {
     }
 }
 
+// ------------------------------------------------------------------ piper voices
+
+/// State of a Piper voice in the voice list.
+pub fn voice_state(voice: &PiperVoiceStatus) -> String {
+    if voice.installed {
+        "installiert".into()
+    } else if voice.downloading {
+        match voice.progress {
+            Some(progress) => format!("lädt {:.0} %", progress * 100.0),
+            None => "lädt …".into(),
+        }
+    } else if voice.error.is_some() {
+        "Download fehlgeschlagen".into()
+    } else {
+        "nicht installiert".into()
+    }
+}
+
 // ------------------------------------------------------------------ updates
 
 /// Status line in "Ueber OpenReader".
@@ -539,6 +557,28 @@ pub fn color_properties(settings: Option<&ReaderSettings>) -> Vec<(&'static str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_states_are_readable() {
+        let mut voice = PiperVoiceStatus {
+            voice_id: "de_DE-thorsten-medium".into(),
+            label: "Thorsten (mittel)".into(),
+            installed: false,
+            downloading: false,
+            progress: None,
+            error: None,
+        };
+        assert_eq!(voice_state(&voice), "nicht installiert");
+        voice.downloading = true;
+        assert_eq!(voice_state(&voice), "lädt …");
+        voice.progress = Some(0.456);
+        assert_eq!(voice_state(&voice), "lädt 46 %");
+        voice.downloading = false;
+        voice.error = Some("offline".into());
+        assert_eq!(voice_state(&voice), "Download fehlgeschlagen");
+        voice.installed = true;
+        assert_eq!(voice_state(&voice), "installiert");
+    }
 
     #[test]
     fn update_texts_follow_the_check_result() {

@@ -11,7 +11,8 @@ use gloo_net::http::{Request, Response};
 use gloo_net::websocket::{futures::WebSocket, Message, State};
 use openreader_api::{
     ApiError, DocumentExtractResponse, ExportResponse, HealthResponse, PlaybackSnapshot, PlaybackState, ReaderEvent,
-    ReaderSettings, SpeakRequest, SpeakResponse, TtsStatusResponse, UpdateInfo,
+    PiperVoiceStatus, ReaderSettings, SpeakRequest, SpeakResponse, TtsStatusResponse, UpdateInfo,
+    VoiceDownloadRequest,
 };
 use serde::de::DeserializeOwned;
 
@@ -82,6 +83,20 @@ pub async fn update_info() -> ApiResult<UpdateInfo> {
 
 pub async fn check_update() -> ApiResult<UpdateInfo> {
     post("/api/update/check", None, "Update check failed").await
+}
+
+pub async fn piper_voices() -> ApiResult<Vec<PiperVoiceStatus>> {
+    get("/api/voices/piper", "Piper voices are not available").await
+}
+
+pub async fn download_piper_voice(voice_id: &str) -> ApiResult<Vec<PiperVoiceStatus>> {
+    let request = Request::post(&url("/api/voices/piper/download"))
+        .json(&VoiceDownloadRequest {
+            voice_id: voice_id.to_string(),
+        })
+        .map_err(|error| error.to_string())?;
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    read(response, "Download failed").await
 }
 
 pub async fn settings() -> ApiResult<ReaderSettings> {

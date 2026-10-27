@@ -35,6 +35,7 @@ use crate::text::{char_len, normalize_selection};
 use crate::tts::orchestrator::{Callbacks, FallbackNotice, TtsOrchestrator};
 use crate::tts::WordBoundary;
 use crate::update::UpdateChecker;
+use crate::voices::VoiceDownloads;
 
 /// What the API needs from the TTS layer (the orchestrator, or a fake in tests).
 #[async_trait]
@@ -126,6 +127,7 @@ pub struct ReaderApp {
     playback: Mutex<PlaybackData>,
     documents: RwLock<Arc<dyn DocumentExtractor>>,
     updates: RwLock<Arc<UpdateChecker>>,
+    pub voices: Arc<VoiceDownloads>,
 }
 
 impl ReaderApp {
@@ -153,6 +155,7 @@ impl ReaderApp {
                     Arc::new(documents)
                 }),
                 updates: RwLock::new(UpdateChecker::new(crate::VERSION)),
+                voices: VoiceDownloads::new(),
             }
         })
     }
@@ -401,6 +404,20 @@ async fn health(State(app): AppState) -> Json<HealthResponse> {
         backend: Some("rust"),
         selection_input: app.selection_status.get(),
     })
+}
+
+async fn piper_voices(State(app): AppState) -> Json<Vec<PiperVoiceStatus>> {
+    Json(app.voices.status())
+}
+
+async fn download_piper_voice(
+    State(app): AppState,
+    Json(request): Json<VoiceDownloadRequest>,
+) -> Result<Json<Vec<PiperVoiceStatus>>, ApiFailure> {
+    app.voices
+        .start(&request.voice_id)
+        .map_err(|error| ApiFailure(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    Ok(Json(app.voices.status()))
 }
 
 async fn update_info(State(app): AppState) -> Json<UpdateInfo> {
@@ -662,6 +679,8 @@ pub fn router(app: Arc<ReaderApp>) -> Router {
             post(extract_document).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)),
         )
         .route("/api/update", get(update_info))
+        .route("/api/voices/piper", get(piper_voices))
+        .route("/api/voices/piper/download", post(download_piper_voice))
         .route("/api/update/check", post(update_check))
         .route("/ws/events", get(events))
         .layer(cors())
@@ -729,6 +748,16 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
 
     // Only the real desktop app looks for updates (not tests or fixtures).
     let update_task = integration.then(|| tokio::spawn(app.clone().run_update_checks()));
+    // Packages ship no Piper voice: fetch one in the background on first start
+    // so that a Seraphina failure always has an offline fallback.
+    if integration && !app.voices.any_installed() {
+        let voices = app.voices.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tracing::info!("no Piper voice installed; downloading {}", crate::voices::FALLBACK_VOICE);
+            let _ = voices.start(crate::voices::FALLBACK_VOICE);
+        });
+    }
 
     let address: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(address).await?;

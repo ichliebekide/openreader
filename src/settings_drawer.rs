@@ -193,6 +193,43 @@ fn VoiceSection() -> impl IntoView {
                 <Icon paths=icons::VOLUME size=16 />
                 {move || if speaking.get() { "TTS läuft" } else { "TTS testen" }}
             </button>
+            <div class="field">
+                <span>"Piper-Stimmen (offline)"</span>
+                <ul class="voice-list">
+                    {move || {
+                        state
+                            .piper_voices
+                            .get()
+                            .into_iter()
+                            .map(|voice| {
+                                let can_download = !voice.installed && !voice.downloading;
+                                let voice_id = voice.voice_id.clone();
+                                let retry = voice.error.is_some();
+                                view! {
+                                    <li class="voice-row" title=voice.error.clone().unwrap_or_default()>
+                                        <span class="voice-name">{voice.label.clone()}</span>
+                                        <span class="voice-state" class:installed=voice.installed>
+                                            {logic::voice_state(&voice)}
+                                        </span>
+                                        {can_download.then(|| view! {
+                                            <button
+                                                class="secondary-button voice-download"
+                                                on:click=move |_| state.download_voice(voice_id.clone())
+                                            >
+                                                {if retry { "Erneut" } else { "Laden" }}
+                                            </button>
+                                        })}
+                                    </li>
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </ul>
+                <p class="field-note">
+                    "Piper liest ohne Internet vor und springt ein, wenn Seraphina nicht erreichbar ist. "
+                    "Eine Stimme wird beim ersten Start automatisch geladen; jede ist etwa 60 bis 110 MB groß."
+                </p>
+            </div>
         </section>
     }
 }
