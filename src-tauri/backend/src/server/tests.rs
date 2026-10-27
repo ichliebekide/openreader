@@ -482,3 +482,24 @@ async fn export_only_writes_wav_files() {
     let (status, _) = call(&app, "POST", "/api/export", Some(serde_json::json!({"text": "Hallo", "export_path": wav}))).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn update_endpoints_report_the_last_check() {
+    fn newer() -> Result<Option<serde_json::Value>> {
+        Ok(Some(serde_json::json!({
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/ichliebekide/openreader/releases/tag/v9.9.9",
+            "body": "Sicherheitsupdate",
+        })))
+    }
+    let (app, _tts, _dir) = prepare();
+    app.set_update_checker(UpdateChecker::with_fetch(crate::VERSION, newer));
+    let (status, info) = call(&app, "GET", "/api/update", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["current"], crate::VERSION);
+    assert!(info["checked_at"].is_null());
+    let (_, info) = call(&app, "POST", "/api/update/check", None).await;
+    assert_eq!(info["available"]["version"], "9.9.9");
+    assert_eq!(info["available"]["security"], true);
+    assert_eq!(call(&app, "GET", "/api/update", None).await.1["available"]["version"], "9.9.9");
+}

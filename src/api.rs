@@ -11,7 +11,7 @@ use gloo_net::http::{Request, Response};
 use gloo_net::websocket::{futures::WebSocket, Message, State};
 use openreader_api::{
     ApiError, DocumentExtractResponse, ExportResponse, HealthResponse, PlaybackSnapshot, PlaybackState, ReaderEvent,
-    ReaderSettings, SpeakRequest, SpeakResponse, TtsStatusResponse,
+    ReaderSettings, SpeakRequest, SpeakResponse, TtsStatusResponse, UpdateInfo,
 };
 use serde::de::DeserializeOwned;
 
@@ -74,6 +74,14 @@ async fn post<T: DeserializeOwned>(path: &str, body: Option<&SpeakRequest>, fall
 
 pub async fn health() -> ApiResult<HealthResponse> {
     get("/api/health", "OpenReader backend is not available").await
+}
+
+pub async fn update_info() -> ApiResult<UpdateInfo> {
+    get("/api/update", "Update status is not available").await
+}
+
+pub async fn check_update() -> ApiResult<UpdateInfo> {
+    post("/api/update/check", None, "Update check failed").await
 }
 
 pub async fn settings() -> ApiResult<ReaderSettings> {

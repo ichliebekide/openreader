@@ -34,6 +34,7 @@ use crate::settings::SettingsStore;
 use crate::text::{char_len, normalize_selection};
 use crate::tts::orchestrator::{Callbacks, FallbackNotice, TtsOrchestrator};
 use crate::tts::WordBoundary;
+use crate::update::UpdateChecker;
 
 /// What the API needs from the TTS layer (the orchestrator, or a fake in tests).
 #[async_trait]
@@ -124,6 +125,7 @@ pub struct ReaderApp {
     task: Mutex<Option<SpeechTask>>,
     playback: Mutex<PlaybackData>,
     documents: RwLock<Arc<dyn DocumentExtractor>>,
+    updates: RwLock<Arc<UpdateChecker>>,
 }
 
 impl ReaderApp {
@@ -150,6 +152,7 @@ impl ReaderApp {
                     documents.set_engine(settings.ocr_engine);
                     Arc::new(documents)
                 }),
+                updates: RwLock::new(UpdateChecker::new(crate::VERSION)),
             }
         })
     }
@@ -167,6 +170,26 @@ impl ReaderApp {
                     app.fallback(notice);
                 }
             })),
+        }
+    }
+
+    pub fn updates(&self) -> Arc<UpdateChecker> {
+        self.updates.read().unwrap().clone()
+    }
+
+    pub fn set_update_checker(&self, checker: Arc<UpdateChecker>) {
+        *self.updates.write().unwrap() = checker;
+    }
+
+    /// Check for a newer release once shortly after start, then daily, while
+    /// the setting allows it.
+    pub async fn run_update_checks(self: Arc<Self>) {
+        tokio::time::sleep(crate::update::FIRST_CHECK_DELAY).await;
+        loop {
+            if self.settings().check_updates {
+                self.updates().check().await;
+            }
+            tokio::time::sleep(crate::update::CHECK_INTERVAL).await;
         }
     }
 
@@ -378,6 +401,14 @@ async fn health(State(app): AppState) -> Json<HealthResponse> {
         backend: Some("rust"),
         selection_input: app.selection_status.get(),
     })
+}
+
+async fn update_info(State(app): AppState) -> Json<UpdateInfo> {
+    Json(app.updates().info())
+}
+
+async fn update_check(State(app): AppState) -> Json<UpdateInfo> {
+    Json(app.updates().check().await)
 }
 
 async fn get_settings(State(app): AppState) -> Json<ReaderSettings> {
@@ -630,6 +661,8 @@ pub fn router(app: Arc<ReaderApp>) -> Router {
             "/api/documents/extract",
             post(extract_document).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)),
         )
+        .route("/api/update", get(update_info))
+        .route("/api/update/check", post(update_check))
         .route("/ws/events", get(events))
         .layer(cors())
         .layer(middleware::from_fn(guard_local))
@@ -694,6 +727,9 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
         }
     });
 
+    // Only the real desktop app looks for updates (not tests or fixtures).
+    let update_task = integration.then(|| tokio::spawn(app.clone().run_update_checks()));
+
     let address: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!("OpenReader Rust backend listening on http://{address}");
@@ -709,6 +745,9 @@ pub async fn serve(config: ServerConfig, shutdown: impl Future<Output = ()> + Se
     }
     app.stop_speech().await;
     monitor_task.abort();
+    if let Some(task) = update_task {
+        task.abort();
+    }
     bridge_task.abort();
     Ok(result?)
 }

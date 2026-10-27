@@ -830,3 +830,46 @@ input[type="range"] {
     animation-duration: 0s !important;
   }
 }
+
+/* ------------------------------------------------------------ updates */
+
+.update-pill {
+  height: 26px;
+  padding: 0 10px;
+  margin-right: 4px;
+  border-radius: 13px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 0.5px solid var(--accent);
+  cursor: pointer;
+}
+
+.update-pill.security {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-color: var(--danger);
+}
+
+.about-version {
+  margin: 0;
+  font-weight: 500;
+}
+
+.update-status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.update-status.available {
+  color: var(--text);
+}
+
+.update-notes {
+  margin: 0;
+  max-height: 9em;
+  overflow: auto;
+  white-space: pre-line;
+  font-size: 13px;
+  color: var(--muted);
+}

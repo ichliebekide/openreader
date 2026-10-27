@@ -5,7 +5,8 @@ use std::time::Duration;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use openreader_api::{
-    HealthResponse, PlaybackState, ReaderEvent, ReaderSettings, SelectionEvent, TtsStatusResponse, VoiceProfile,
+    HealthResponse, PlaybackState, ReaderEvent, ReaderSettings, SelectionEvent, TtsStatusResponse, UpdateInfo,
+    VoiceProfile,
 };
 
 use wasm_bindgen::JsCast;
@@ -64,6 +65,9 @@ struct Bookkeeping {
 #[derive(Clone, Copy)]
 pub struct AppState {
     pub health: RwSignal<Option<HealthResponse>>,
+    /// Result of the backend's last update check.
+    pub update: RwSignal<Option<UpdateInfo>>,
+    pub update_checking: RwSignal<bool>,
     pub settings: RwSignal<Option<ReaderSettings>>,
     pub tts_status: RwSignal<Option<TtsStatusResponse>>,
     pub save_state: RwSignal<SaveState>,
@@ -92,6 +96,8 @@ impl AppState {
             .unwrap_or(Theme::System);
         let state = Self {
             health: RwSignal::new(None),
+            update: RwSignal::new(None),
+            update_checking: RwSignal::new(false),
             settings: RwSignal::new(None),
             tts_status: RwSignal::new(None),
             save_state: RwSignal::new(SaveState::Idle),
@@ -120,6 +126,10 @@ impl AppState {
             }
         });
 
+        // The backend checks GitHub once a day; the UI only reads its result.
+        self.load_update();
+        let _ = set_interval_with_handle(move || self.load_update(), Duration::from_secs(30 * 60));
+
         spawn_local(api::run_event_stream(api::EventHandlers {
             on_open: Box::new(move || {
                 spawn_local(async move {
@@ -134,6 +144,25 @@ impl AppState {
                 ReaderEvent::Fallback(fallback) => self.playback.update(|model| model.notice = Some(fallback.message)),
             }),
         }));
+    }
+
+    fn load_update(self) {
+        spawn_local(async move {
+            if let Ok(info) = api::update_info().await {
+                self.update.set(Some(info));
+            }
+        });
+    }
+
+    /// "Jetzt pruefen" in the settings drawer.
+    pub fn check_update(self) {
+        self.update_checking.set(true);
+        spawn_local(async move {
+            if let Ok(info) = api::check_update().await {
+                self.update.set(Some(info));
+            }
+            self.update_checking.set(false);
+        });
     }
 
     fn refresh(self) {

@@ -153,6 +153,24 @@ fn set_overlay_input(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
         .map_err(|error| error.to_string())
 }
 
+/// Open an OpenReader release page in the default browser. Only this
+/// project's release pages are accepted.
+#[tauri::command]
+fn open_release_page(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/ichliebekide/openreader/releases/") {
+        return Err("Nur Release-Seiten von OpenReader werden geoeffnet".into());
+    }
+    let mut child = std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    // Reap xdg-open so it does not linger as a zombie.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn hide_overlay(app: tauri::AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("overlay") else {
@@ -184,7 +202,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             show_overlay,
             hide_overlay,
-            set_overlay_input
+            set_overlay_input,
+            open_release_page
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

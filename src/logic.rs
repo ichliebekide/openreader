@@ -2,7 +2,7 @@
 
 use openreader_api::{
     parse_hex_color, HealthResponse, OcrEngineKind, PlaybackState, ReaderSettings, SelectionInput, TtsEngine,
-    VoiceProfile,
+    UpdateInfo, VoiceProfile,
 };
 
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8765";
@@ -420,6 +420,34 @@ impl Theme {
     }
 }
 
+// ------------------------------------------------------------------ updates
+
+/// Status line in "Ueber OpenReader".
+pub fn update_status(info: Option<&UpdateInfo>) -> String {
+    let Some(info) = info else {
+        return "Update-Status nicht verfügbar".into();
+    };
+    if let Some(release) = &info.available {
+        let kind = if release.security { "Sicherheitsupdate" } else { "Update" };
+        return format!("{kind}: Version {} ist verfügbar", release.version);
+    }
+    match (&info.error, info.checked_at) {
+        (Some(_), _) => "Prüfung fehlgeschlagen, kein Internet oder GitHub nicht erreichbar".into(),
+        (None, None) => "Noch nicht geprüft".into(),
+        (None, Some(_)) => "OpenReader ist aktuell".into(),
+    }
+}
+
+/// Label of the top bar hint, only when a newer release exists.
+pub fn update_badge(info: Option<&UpdateInfo>) -> Option<String> {
+    let release = info?.available.as_ref()?;
+    Some(if release.security {
+        format!("Sicherheitsupdate {}", release.version)
+    } else {
+        format!("Update {}", release.version)
+    })
+}
+
 // ------------------------------------------------------------------ colours
 
 /// Accent presets for the settings drawer. `None` is the built-in amber,
@@ -511,6 +539,28 @@ pub fn color_properties(settings: Option<&ReaderSettings>) -> Vec<(&'static str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_texts_follow_the_check_result() {
+        use openreader_api::ReleaseInfo;
+        let mut info = UpdateInfo { current: "0.1.0".into(), ..UpdateInfo::default() };
+        assert_eq!(update_status(Some(&info)), "Noch nicht geprüft");
+        assert_eq!(update_badge(Some(&info)), None);
+        info.checked_at = Some("2026-10-27T08:00:00Z".parse().unwrap());
+        assert_eq!(update_status(Some(&info)), "OpenReader ist aktuell");
+        info.error = Some("offline".into());
+        assert!(update_status(Some(&info)).starts_with("Prüfung fehlgeschlagen"));
+        info.error = None;
+        info.available = Some(ReleaseInfo {
+            version: "0.1.1".into(),
+            url: "https://github.com/ichliebekide/openreader/releases/tag/v0.1.1".into(),
+            notes: String::new(),
+            security: true,
+        });
+        assert_eq!(update_status(Some(&info)), "Sicherheitsupdate: Version 0.1.1 ist verfügbar");
+        assert_eq!(update_badge(Some(&info)).as_deref(), Some("Sicherheitsupdate 0.1.1"));
+        assert_eq!(update_status(None), "Update-Status nicht verfügbar");
+    }
 
     #[test]
     fn colour_settings_become_css_properties() {

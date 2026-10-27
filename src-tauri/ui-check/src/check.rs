@@ -508,6 +508,31 @@ pub fn run(fixture: &Fixture, chrome: Option<&Path>, screenshots: &Path) -> Resu
         page.screenshot(&format!("fokus-light-{width}x{height}"))?;
     }
     page.viewport(1240, 800)?;
+    // Update hint: a (fake) newer security release shows in the top bar and
+    // in "Ueber OpenReader".
+    fn security_release() -> anyhow::Result<Option<serde_json::Value>> {
+        Ok(Some(serde_json::json!({
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/ichliebekide/openreader/releases/tag/v9.9.9",
+            "body": "Schliesst eine Sicherheitsluecke.",
+        })))
+    }
+    let checker = openreader_backend::update::UpdateChecker::with_fetch(openreader_backend::VERSION, security_release);
+    fixture.app.set_update_checker(checker.clone());
+    tokio::runtime::Runtime::new()?.block_on(checker.check());
+    page.goto("about:blank")?;
+    page.goto(&fixture.page_url(""))?;
+    page.wait("update pill", "document.querySelector('.update-pill.security')")?;
+    let pill = page.text("document.querySelector('.update-pill').textContent")?;
+    ensure!(pill == "Sicherheitsupdate 9.9.9", "update pill {pill:?}");
+    page.click("button[aria-label='Einstellungen']")?;
+    page.wait("about section", "document.querySelector('.update-status.available')")?;
+    let status = page.text("document.querySelector('.update-status').textContent")?;
+    ensure!(status == "Sicherheitsupdate: Version 9.9.9 ist verfügbar", "update status {status:?}");
+    page.eval("document.querySelector('.about-section').scrollIntoView(), true")?;
+    page.screenshot("fokus-update")?;
+    page.tab.press_key("Escape")?;
+
     let errors = page.errors()?;
     ensure!(errors.is_empty(), "page errors: {errors:?}");
 

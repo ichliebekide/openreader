@@ -53,6 +53,22 @@ pub struct OverlayPosition {
 }
 
 #[derive(Serialize)]
+pub struct ReleasePage {
+    pub url: String,
+}
+
+/// Open a release page in the browser (outside Tauri: a new tab).
+pub fn open_release_page(url: String) {
+    if available() {
+        leptos::task::spawn_local(async move {
+            let _ = invoke("open_release_page", &ReleasePage { url }).await;
+        });
+    } else if let Some(window) = web_sys::window() {
+        let _ = window.open_with_url_and_target(&url, "_blank");
+    }
+}
+
+#[derive(Serialize)]
 pub struct OverlayInput {
     pub enabled: bool,
 }

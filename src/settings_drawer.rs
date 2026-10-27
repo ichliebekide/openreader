@@ -9,6 +9,7 @@ use wasm_bindgen::JsCast;
 use crate::icons::{self, Icon};
 use crate::logic::{self, BubbleColor, Theme};
 use crate::state::{AppState, ExportState};
+use crate::tauri;
 
 fn input_value(event: &ev::Event) -> String {
     event
@@ -82,6 +83,7 @@ pub fn SettingsDrawer() -> impl IntoView {
                 <DocumentsSection />
                 <AppearanceSection />
                 <ExportSection />
+                <AboutSection />
             </div>
         </aside>
     }
@@ -599,6 +601,73 @@ fn ExportSection() -> impl IntoView {
                 ExportState::Failed(error) => view! { <p class="field-note error" role="alert">{error}</p> }.into_any(),
                 _ => ().into_any(),
             }}
+        </section>
+    }
+}
+
+#[component]
+fn AboutSection() -> impl IntoView {
+    let state = expect_context::<AppState>();
+    let current = Memo::new(move |_| {
+        state
+            .update
+            .with(|info| info.as_ref().map(|info| info.current.clone()))
+            .or_else(|| state.health.with(|health| health.as_ref().map(|health| health.version.clone())))
+            .unwrap_or_default()
+    });
+    let check_updates = Memo::new(move |_| {
+        state
+            .settings
+            .with(|s| s.as_ref().map(|s| s.check_updates).unwrap_or(true))
+    });
+    let release = Memo::new(move |_| state.update.with(|info| info.as_ref().and_then(|info| info.available.clone())));
+
+    view! {
+        <section class="section about-section">
+            <h3>"Über OpenReader"</h3>
+            <p class="about-version">{move || format!("Version {}", current.get())}</p>
+            <p class="update-status" class:available=move || release.with(Option::is_some)>
+                {move || state.update.with(|info| logic::update_status(info.as_ref()))}
+            </p>
+            {move || {
+                release.get().map(|release| {
+                    let url = release.url.clone();
+                    view! {
+                        {(!release.notes.is_empty()).then(|| view! { <p class="update-notes">{release.notes.clone()}</p> })}
+                        <button class="secondary-button" on:click=move |_| tauri::open_release_page(url.clone())>
+                            "Release-Seite öffnen"
+                        </button>
+                    }
+                })
+            }}
+            <label class="switch-row">
+                <span>"Automatisch nach Updates suchen"</span>
+                <input
+                    class="switch check-updates"
+                    type="checkbox"
+                    role="switch"
+                    disabled=move || state.settings.with(Option::is_none)
+                    prop:checked=move || check_updates.get()
+                    on:change=move |event| {
+                        let checked = input_checked(&event);
+                        state.update_settings(move |mut settings| {
+                            settings.check_updates = checked;
+                            settings
+                        });
+                    }
+                />
+            </label>
+            <button
+                class="secondary-button check-now"
+                disabled=move || state.update_checking.get()
+                on:click=move |_| state.check_update()
+            >
+                {move || if state.update_checking.get() { "Prüfe …" } else { "Jetzt prüfen" }}
+            </button>
+            <p class="field-note">
+                "Fragt einmal am Tag bei GitHub nach einer neuen Version. Dabei wird nur die "
+                "Versionsnummer übertragen, keine Daten über dich oder deine Texte."
+            </p>
         </section>
     }
 }

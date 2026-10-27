@@ -317,6 +317,9 @@ pub struct ReaderSettings {
     /// colour, or `#rrggbb`.
     #[serde(default)]
     pub bubble_color: Option<String>,
+    /// Look for a newer OpenReader release on GitHub once a day.
+    #[serde(default = "yes")]
+    pub check_updates: bool,
 }
 
 /// `#rrggbb` as RGB; anything else (including shorthand) is rejected so
@@ -405,6 +408,7 @@ impl Default for ReaderSettings {
             clear_primary_after_capture: false,
             accent_color: None,
             bubble_color: None,
+            check_updates: true,
         }
     }
 }
@@ -507,6 +511,34 @@ pub struct FallbackEvent {
     pub message: String,
     #[serde(serialize_with = "serialize_datetime")]
     pub created_at: DateTime<Utc>,
+}
+
+/// A published OpenReader release newer than the running version.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReleaseInfo {
+    /// Without the leading `v`, e.g. `0.1.1`.
+    pub version: String,
+    /// Release page on GitHub.
+    pub url: String,
+    /// Start of the release notes.
+    pub notes: String,
+    /// The release notes mention a security fix.
+    pub security: bool,
+}
+
+/// `GET /api/update` and `POST /api/update/check`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub current: String,
+    /// Set when a newer release exists.
+    #[serde(default)]
+    pub available: Option<ReleaseInfo>,
+    /// When the last check finished (successfully or not).
+    #[serde(default)]
+    pub checked_at: Option<DateTime<Utc>>,
+    /// Why the last check failed (no network, GitHub unreachable, ...).
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

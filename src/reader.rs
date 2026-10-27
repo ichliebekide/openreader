@@ -103,6 +103,23 @@ fn TopBar() -> impl IntoView {
                 </span>
             </div>
             <div class="topbar-actions">
+                {move || {
+                    state.update.with(|info| {
+                        let info = info.as_ref()?;
+                        let release = info.available.clone()?;
+                        let label = logic::update_badge(Some(info))?;
+                        let class = if release.security { "update-pill security" } else { "update-pill" };
+                        Some(view! {
+                            <button
+                                class=class
+                                title="Release-Seite mit den Änderungen öffnen"
+                                on:click=move |_| tauri::open_release_page(release.url.clone())
+                            >
+                                {label}
+                            </button>
+                        })
+                    })
+                }}
                 <button
                     class="icon-button"
                     title="Datei öffnen"

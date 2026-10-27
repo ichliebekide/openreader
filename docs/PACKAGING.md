@@ -62,3 +62,31 @@ Zur Laufzeit geladen (nicht im Paket):
 Build-Abhaengigkeiten: Rust mit `wasm32-unknown-unknown`-Target, `trunk`,
 `tauri-cli` (`cargo tauri`), `cmake`, C-Compiler, `pkg-config`,
 `libasound2-dev`, `libwebkit2gtk-4.1-dev` (Tauri).
+
+## Releases und Update-Hinweis
+
+Ein Release entsteht automatisch, sobald ein Versions-Tag gepusht wird
+(`.github/workflows/release.yml`): GitHub Actions prüft, dass Tag und
+`tauri.conf.json` übereinstimmen, lässt alle Tests laufen, baut `.deb` und
+AppImage und veröffentlicht sie als GitHub-Release. Der Release-Text ist der
+passende Abschnitt aus `CHANGELOG.md`.
+
+Ablauf für eine neue Version, z. B. 0.1.1:
+
+```bash
+./scripts/bump-version.sh 0.1.1      # alle Cargo.toml und tauri.conf.json
+# CHANGELOG.md: Abschnitt "## [0.1.1] – Datum" mit den Änderungen ergänzen
+git commit -am "Release 0.1.1"
+git tag v0.1.1
+git push origin main v0.1.1
+```
+
+Sicherheitskorrekturen bekommen im CHANGELOG einen Abschnitt
+„### Sicherheit“. OpenReader erkennt das Wort im Release-Text und zeigt das
+Update dann als Sicherheitsupdate hervorgehoben an.
+
+Der Update-Hinweis (`backend/src/update.rs`) fragt einmal täglich
+`api.github.com/repos/ichliebekide/openreader/releases/latest` ab (abschaltbar
+unter Einstellungen → Über OpenReader). Übertragen wird nur die Versionsnummer
+im User-Agent; es wird nichts heruntergeladen oder installiert, die App
+verlinkt nur die Release-Seite.

@@ -22,8 +22,9 @@ pub mod server;
 pub mod settings;
 pub mod text;
 pub mod tts;
+pub mod update;
 
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Log to an append-only file (`~/.cache/openreader/backend.log` in the app),
 /// like the Python backend's stdout/stderr redirection. `RUST_LOG` overrides the level.
