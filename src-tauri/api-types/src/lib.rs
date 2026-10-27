@@ -258,7 +258,10 @@ pub fn default_voice_profiles() -> Vec<VoiceProfile> {
     ]
 }
 
-fn default_excluded_window_classes() -> Vec<String> {
+/// Terminal emulators whose selections are not offered (matched as a
+/// case-insensitive substring of the active window's class or name, so no
+/// very short tokens that would also hit unrelated apps).
+pub fn default_excluded_window_classes() -> Vec<String> {
     [
         "alacritty",
         "com.mitchellh.ghostty",
@@ -267,6 +270,29 @@ fn default_excluded_window_classes() -> Vec<String> {
         "konsole",
         "org.wezfurlong.wezterm",
         "yakuake",
+        "ptyxis",
+        "org.gnome.console",
+        "kgx",
+        "foot",
+        "tilix",
+        "terminator",
+        "xfce4-terminal",
+        "mate-terminal",
+        "lxterminal",
+        "qterminal",
+        "terminology",
+        "xterm",
+        "urxvt",
+        "blackbox",
+        "guake",
+        "tilda",
+        "cool-retro-term",
+        "deepin-terminal",
+        "io.elementary.terminal",
+        "cosmic-term",
+        "contour",
+        "tabby",
+        "dev.warp",
     ]
     .iter()
     .map(|value| value.to_string())

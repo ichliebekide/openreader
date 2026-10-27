@@ -112,6 +112,17 @@ mod tests {
     }
 
     #[test]
+    fn common_terminals_are_recognised() {
+        let guard = SelectionGuard::new(ReaderSettings::default());
+        for class in ["org.gnome.Ptyxis", "org.gnome.Console", "foot", "com.gexperts.Tilix", "XTerm"] {
+            assert!(!guard.accepts("Ein ganz normaler Satz.", &context(Some(class))), "{class}");
+        }
+        for class in ["firefox", "org.kde.okular", "steam", "com.anthropic.Claude"] {
+            assert!(guard.accepts("Ein ganz normaler Satz.", &context(Some(class))), "{class}");
+        }
+    }
+
+    #[test]
     fn resource_name_is_used_when_class_is_missing() {
         let guard = SelectionGuard::new(ReaderSettings::default());
         let snapshot = DesktopContextSnapshot {

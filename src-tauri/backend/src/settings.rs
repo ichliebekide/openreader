@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::models::{default_voice_profiles, ReaderSettings};
+use crate::models::{default_excluded_window_classes, default_voice_profiles, ReaderSettings};
 
 pub struct SettingsStore {
     pub path: PathBuf,
@@ -66,6 +66,17 @@ fn load(path: &Path) -> ReaderSettings {
 }
 
 pub fn with_default_profiles(mut settings: ReaderSettings) -> ReaderSettings {
+    // Terminals added to the defaults later must reach existing settings too.
+    for class in default_excluded_window_classes() {
+        let known = settings
+            .excluded_window_classes
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&class));
+        if !known {
+            settings.excluded_window_classes.push(class);
+        }
+    }
+
     let mut existing: Vec<String> = settings.voice_profiles.iter().map(|p| p.id.clone()).collect();
     for profile in default_voice_profiles() {
         if !existing.contains(&profile.id) {
@@ -224,7 +235,10 @@ mod tests {
         let settings = store.settings();
         assert_eq!(settings.backend_engine, TtsEngine::Edge);
         assert_eq!(settings.active_profile_id.as_deref(), Some("edge-de-seraphina"));
-        assert_eq!(settings.excluded_window_classes, ["konsole"]);
+        // The user's own entries stay first; newer default terminals are added.
+        assert_eq!(settings.excluded_window_classes[0], "konsole");
+        assert!(settings.excluded_window_classes.iter().any(|class| class == "ptyxis"));
+        assert_eq!(settings.excluded_window_classes.iter().filter(|class| *class == "konsole").count(), 1);
         assert_eq!(settings.voice_profiles[0].length_scale, 1.1);
         assert_eq!(settings.voice_profiles[0].piper_config_path, None);
         // Missing default profiles are merged in after the user's own profiles.
@@ -233,6 +247,7 @@ mod tests {
         // The Rust writer uses the same field order and indentation as pydantic.
         let mut subset = settings.clone();
         subset.voice_profiles.truncate(1);
+        subset.excluded_window_classes.truncate(1);
         let expected = format!(
             "{}],\n  \"ocr_engine\": \"tesseract\",\n  \"overlay_bubble_size\": 48,\n  \"clear_primary_after_capture\": false,\n  \"accent_color\": null,\n  \"bubble_color\": null,\n  \"check_updates\": true\n}}",
             python.strip_suffix("]\n}").unwrap()
