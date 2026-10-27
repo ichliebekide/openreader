@@ -1,6 +1,6 @@
 [package]
 name = "openreader-backend"
-version = "0.1.0"
+version = "0.1.1"
 description = "Native Rust backend for OpenReader (REST/WebSocket API, TTS, selection, documents)."
 license = "Apache-2.0"
 edition = "2021"

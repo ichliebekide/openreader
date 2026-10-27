@@ -1,6 +1,6 @@
 [package]
 name = "openreader-ui-check"
-version = "0.1.0"
+version = "0.1.1"
 description = "Headless UI check and preview server for the OpenReader Leptos UI (silent fixture backend, no desktop integration)."
 license = "Apache-2.0"
 edition = "2021"

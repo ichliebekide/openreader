@@ -4,7 +4,7 @@
     "Id": "openreader-context",
     "Name": "OpenReader Context Bridge",
     "Description": "Reports cursor position and focused window class to the local OpenReader service.",
-    "Version": "0.1.0",
+    "Version": "0.1.1",
     "License": "Apache-2.0",
     "Authors": [
       {

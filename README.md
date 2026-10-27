@@ -22,12 +22,37 @@ OpenReader ist ein Wayland-first Linux-Reader als moderne Alternative zu MWS Rea
   </tr>
 </table>
 
+## Installation
+
+**Voraussetzung:** KDE Plasma 6 unter Wayland, z. B. Kubuntu bzw. Ubuntu ab
+25.04. Ubuntu 24.04 bringt noch Plasma 5 mit und wird nicht unterstützt.
+
+Die aktuelle Version gibt es unter
+[Releases](https://github.com/ichliebekide/openreader/releases/latest):
+
+- **`.deb` (empfohlen für Ubuntu/Kubuntu):** herunterladen und mit
+  `sudo apt install ./OpenReader_<version>_amd64.deb` installieren. OpenReader
+  erscheint danach im Startmenü.
+- **AppImage (andere Distributionen):** ausführbar machen
+  (`chmod +x OpenReader_<version>_amd64.AppImage`) und starten.
+
+Beim ersten Start richtet OpenReader sein KWin-Skript selbst ein (Position
+der Vorlese-Blase, Erkennung von Terminals) und lädt eine Piper-Stimme
+(Thorsten, etwa 60 MB) im Hintergrund, damit es auch ohne Internet vorlesen
+kann. Weitere Stimmen lassen sich in den Einstellungen unter „Stimme“ laden.
+Für Texterkennung in Bildern empfiehlt sich zusätzlich
+`sudo apt install tesseract-ocr tesseract-ocr-deu`.
+
+Neue Versionen meldet OpenReader selbst (Einstellungen → Über OpenReader).
+
+## Technik
+
 Der MVP ist auf KDE Plasma + Wayland und Kubuntu 25 ausgelegt. Er vermeidet Windows- oder X11-only Hooks und nutzt stattdessen:
 
 - `ext-data-control-v1` fuer PRIMARY Selection unter aktuellem KDE/KWin
 - Klipper D-Bus als KDE-Fallback
 - `xdg-desktop-portal` für Desktop-konforme Integrationen wie globale Shortcuts
-- optionales KWin-Skript für Cursorposition und aktive Fensterklasse
+- ein KWin-Skript für Cursorposition und aktive Fensterklasse (richtet die App beim Start selbst ein)
 - Tauri/Rust für Desktop-App, Tray und Overlay-Fenster
 - ein natives Rust-Backend (axum) für Selection-Monitoring, TTS, OCR und Dokument-Extraktion
 

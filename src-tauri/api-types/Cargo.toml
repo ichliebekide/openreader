@@ -1,6 +1,6 @@
 [package]
 name = "openreader-api"
-version = "0.1.0"
+version = "0.1.1"
 description = "Serde models of the OpenReader HTTP/WebSocket API, shared by the backend and the Leptos UI (native + wasm32)."
 license = "Apache-2.0"
 edition = "2021"

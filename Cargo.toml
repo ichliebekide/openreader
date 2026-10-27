@@ -9,7 +9,7 @@
 # lock file and never pulls in the native backend/Tauri crates.
 [package]
 name = "openreader-ui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Leptos user interface of OpenReader."
 license = "Apache-2.0"
 edition = "2021"

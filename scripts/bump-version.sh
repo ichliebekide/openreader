@@ -20,6 +20,7 @@ for manifest in Cargo.toml src-tauri/Cargo.toml src-tauri/backend/Cargo.toml \
   sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" "$manifest"
 done
 sed -i "0,/\"version\": \".*\"/s//\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+sed -i "0,/\"Version\": \".*\"/s//\"Version\": \"$VERSION\"/" integrations/kwin/openreader-context/metadata.json
 
 (cd src-tauri && cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null)
 cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null

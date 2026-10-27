@@ -3543,7 +3543,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openreader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "boa_engine",
  "gtk",
@@ -3553,13 +3553,14 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
  "tokio",
  "zbus",
 ]
 
 [[package]]
 name = "openreader-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -3568,7 +3569,7 @@ dependencies = [
 
 [[package]]
 name = "openreader-backend"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3619,7 +3620,7 @@ dependencies = [
 
 [[package]]
 name = "openreader-ui-check"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -5,6 +5,24 @@ Alle nennenswerten Änderungen an OpenReader. Die Versionen folgen
 Version wird beim Release automatisch als Release-Text übernommen; enthält er
 das Wort „Sicherheit“, zeigt OpenReader das Update als Sicherheitsupdate an.
 
+## [0.1.1] – 2026-10-27
+
+Macht die installierten Pakete vollständig nutzbar.
+
+### Behoben
+- Das KWin-Skript fehlte in den Paketen: Ohne es erschien die Vorlese-Blase
+  nicht neben dem Mauszeiger und „Terminals ignorieren“ griff nicht.
+  OpenReader richtet das Skript jetzt beim Start selbst ein und hält es nach
+  Updates aktuell.
+- Die Piper-Stimmen fehlten in den Paketen, damit gab es keine Ausweichstimme,
+  wenn Seraphina nicht erreichbar ist. Beim ersten Start wird jetzt Thorsten
+  (etwa 60 MB) im Hintergrund geladen; alle Piper-Stimmen lassen sich in den
+  Einstellungen unter „Stimme“ einzeln laden, mit Fortschrittsanzeige.
+
+### Dokumentation
+- README mit Installationsanleitung; Voraussetzung ist KDE Plasma 6
+  (Ubuntu/Kubuntu ab 25.04).
+
 ## [0.1.0] – 2026-10-27
 
 Erste veröffentlichte Version.
