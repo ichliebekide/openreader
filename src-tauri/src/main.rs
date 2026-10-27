@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(target_os = "linux")]
+mod kwin_script;
+#[cfg(target_os = "linux")]
 mod overlay_focus;
 #[cfg(target_os = "linux")]
 mod overlay_input;
@@ -208,6 +210,12 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "linux")]
             overlay_focus::ensure_kde_rule().map_err(std::io::Error::other)?;
+            // Cursor position and active window for the overlay and the terminal
+            // filter; without it OpenReader still works, so only log failures.
+            #[cfg(target_os = "linux")]
+            if let Err(error) = kwin_script::ensure_installed() {
+                eprintln!("OpenReader KWin script: {error}");
+            }
             let backend = start_backend();
             app.manage(BackendProcess(Mutex::new(backend)));
             configure_overlay(app.get_webview_window("overlay"));
