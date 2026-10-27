@@ -9,7 +9,7 @@ use crate::icons::{self, Icon};
 use crate::logic::{self, Readiness};
 use crate::settings_drawer::SettingsDrawer;
 use crate::state::AppState;
-use crate::tauri;
+use crate::tauri::{self, WindowAction};
 
 pub const IMPORT_ACCEPT: &str = ".pdf,.epub,.txt,.md,.html,.htm,.xhtml,.png,.jpg,.jpeg,.tif,.tiff,.webp";
 
@@ -34,8 +34,42 @@ pub fn MainApp() -> impl IntoView {
             <MessageLine />
             <PlayerBar />
             <SettingsDrawer />
+            {tauri::available().then(|| view! { <ResizeEdges /> })}
         </main>
     }
+}
+
+/// Without a window frame, edges and corners are thin invisible strips that
+/// hand resizing to the compositor.
+#[component]
+fn ResizeEdges() -> impl IntoView {
+    const EDGES: [(&str, &str); 8] = [
+        ("n", "North"),
+        ("s", "South"),
+        ("e", "East"),
+        ("w", "West"),
+        ("ne", "NorthEast"),
+        ("nw", "NorthWest"),
+        ("se", "SouthEast"),
+        ("sw", "SouthWest"),
+    ];
+    EDGES
+        .into_iter()
+        .map(|(edge, direction)| {
+            view! {
+                <div
+                    class=format!("resize-edge {edge}")
+                    aria-hidden="true"
+                    on:mousedown=move |event: ev::MouseEvent| {
+                        if event.button() == 0 {
+                            event.prevent_default();
+                            tauri::start_window_resize(direction);
+                        }
+                    }
+                ></div>
+            }
+        })
+        .collect_view()
 }
 
 fn state() -> AppState {
@@ -69,7 +103,15 @@ fn TopBar() -> impl IntoView {
             .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
             .and_then(|element| element.closest("button, input, select, label, a").ok().flatten())
             .is_some();
-        if !on_control {
+        if on_control {
+            return;
+        }
+        // Like a title bar: a double click maximizes or restores. Checked on
+        // the second press, because a drag hands the pointer to the compositor
+        // and the browser's dblclick event may never arrive.
+        if event.detail() >= 2 {
+            tauri::window_action(WindowAction::ToggleMaximize);
+        } else {
             tauri::start_window_drag();
         }
     };
@@ -157,6 +199,36 @@ fn TopBar() -> impl IntoView {
                 >
                     <Icon paths=icons::ADJUSTMENTS />
                 </button>
+                // The main window has no title bar: GTK's client-side one would
+                // not match KDE or this UI, so the window buttons live here.
+                {tauri::available().then(|| view! {
+                    <div class="window-controls">
+                        <button
+                            class="icon-button window-button"
+                            title="Minimieren"
+                            aria-label="Minimieren"
+                            on:click=move |_| tauri::window_action(WindowAction::Minimize)
+                        >
+                            <Icon paths=icons::MINIMIZE />
+                        </button>
+                        <button
+                            class="icon-button window-button"
+                            title="Maximieren oder wiederherstellen"
+                            aria-label="Maximieren oder wiederherstellen"
+                            on:click=move |_| tauri::window_action(WindowAction::ToggleMaximize)
+                        >
+                            <Icon paths=icons::MAXIMIZE />
+                        </button>
+                        <button
+                            class="icon-button window-button close"
+                            title="Schließen (OpenReader läuft in der Leiste weiter)"
+                            aria-label="Schließen"
+                            on:click=move |_| tauri::window_action(WindowAction::Close)
+                        >
+                            <Icon paths=icons::CLOSE />
+                        </button>
+                    </div>
+                })}
             </div>
         </header>
     }

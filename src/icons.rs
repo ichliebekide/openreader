@@ -8,6 +8,8 @@ pub const FILE_IMPORT: &str = r#"<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 
 pub const PLAY: &str = r#"<path d="M6 4v16a1 1 0 0 0 1.524 .852l13 -8a1 1 0 0 0 0 -1.704l-13 -8a1 1 0 0 0 -1.524 .852z" fill="currentColor" stroke="none"/>"#;
 pub const PAUSE: &str = r#"<path d="M9 4h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h2a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2z" fill="currentColor" stroke="none"/><path d="M17 4h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h2a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2z" fill="currentColor" stroke="none"/>"#;
 pub const STOP: &str = r#"<path d="M5 7a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2z"/>"#;
+pub const MINIMIZE: &str = r#"<path d="M6 12h12"/>"#;
+pub const MAXIMIZE: &str = r#"<path d="M6 8a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2z"/>"#;
 pub const CLOSE: &str = r#"<path d="M18 6l-12 12"/><path d="M6 6l12 12"/>"#;
 pub const SPINNER: &str = r#"<path d="M12 3a9 9 0 1 0 9 9"/>"#;
 pub const VOLUME: &str = r#"<path d="M15 8a5 5 0 0 1 0 8"/><path d="M17.7 5a9 9 0 0 1 0 14"/><path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5"/>"#;

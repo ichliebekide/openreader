@@ -873,3 +873,59 @@ input[type="range"] {
   font-size: 13px;
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------ window buttons */
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 0.5px solid var(--line);
+}
+
+.window-button.close:hover {
+  color: #fff;
+  background: var(--danger);
+}
+
+/* Resize strips of the frameless main window (5px edges, 12px corners). */
+.resize-edge {
+  position: fixed;
+  z-index: 1000;
+}
+
+.resize-edge.n,
+.resize-edge.s {
+  left: 12px;
+  right: 12px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.resize-edge.e,
+.resize-edge.w {
+  top: 12px;
+  bottom: 12px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.resize-edge.n { top: 0; }
+.resize-edge.s { bottom: 0; }
+.resize-edge.e { right: 0; }
+.resize-edge.w { left: 0; }
+
+.resize-edge.ne,
+.resize-edge.nw,
+.resize-edge.se,
+.resize-edge.sw {
+  width: 12px;
+  height: 12px;
+}
+
+.resize-edge.ne { top: 0; right: 0; cursor: nesw-resize; }
+.resize-edge.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.resize-edge.nw { top: 0; left: 0; cursor: nwse-resize; }
+.resize-edge.se { bottom: 0; right: 0; cursor: nwse-resize; }

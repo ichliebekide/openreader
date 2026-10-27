@@ -20,6 +20,18 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = startDragging)]
     async fn start_dragging(this: &TauriWindow) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = startResizeDragging)]
+    async fn start_resize_dragging(this: &TauriWindow, direction: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch)]
+    async fn minimize(this: &TauriWindow) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = toggleMaximize)]
+    async fn toggle_maximize(this: &TauriWindow) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch)]
+    async fn close(this: &TauriWindow) -> Result<JsValue, JsValue>;
 }
 
 /// `true` inside the Tauri WebView.
@@ -111,6 +123,43 @@ pub fn start_window_drag() {
     wasm_bindgen_futures::spawn_local(async {
         if let Ok(window) = current_window() {
             let _ = window.start_dragging().await;
+        }
+    });
+}
+
+/// Window buttons of the undecorated main window (the shell hides the window
+/// to the tray on close).
+#[derive(Clone, Copy)]
+pub enum WindowAction {
+    Minimize,
+    ToggleMaximize,
+    Close,
+}
+
+pub fn window_action(action: WindowAction) {
+    if !available() {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(window) = current_window() {
+            let _ = match action {
+                WindowAction::Minimize => window.minimize().await,
+                WindowAction::ToggleMaximize => window.toggle_maximize().await,
+                WindowAction::Close => window.close().await,
+            };
+        }
+    });
+}
+
+/// Let the compositor resize the undecorated main window from an edge or
+/// corner; `direction` is a Tauri `ResizeDirection` (`"North"`, `"SouthEast"`, ...).
+pub fn start_window_resize(direction: &'static str) {
+    if !available() {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(window) = current_window() {
+            let _ = window.start_resize_dragging(direction).await;
         }
     });
 }

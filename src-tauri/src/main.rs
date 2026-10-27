@@ -263,8 +263,12 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    TrayIconBuilder::with_id("openreader-tray")
-        .menu(&menu)
+    let mut tray = TrayIconBuilder::with_id("openreader-tray").tooltip("OpenReader");
+    // Without an icon the status notifier shows an empty slot.
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.menu(&menu)
         .show_menu_on_left_click(true)
         .build(app)?;
 
