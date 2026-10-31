@@ -5,6 +5,22 @@ Alle nennenswerten Änderungen an OpenReader. Die Versionen folgen
 Version wird beim Release automatisch als Release-Text übernommen; enthält er
 das Wort „Sicherheit“, zeigt OpenReader das Update als Sicherheitsupdate an.
 
+## [0.1.2] – 2026-10-31
+
+Sicherheitsupdate für das Öffnen von Dokumenten und für Online-Verbindungen.
+
+### Sicherheit
+- Ein präpariertes PDF mit sehr tief verschachtelten Objekten konnte
+  OpenReader beim Öffnen komplett abstürzen lassen. Behoben durch eine neue
+  Version der PDF-Bibliothek (lopdf 0.42, RUSTSEC-2026-0187).
+- EPUB: aktualisierte ZIP- und XML-Bibliotheken; präparierte Dateien können
+  das Einlesen nicht mehr übermäßig verlangsamen oder den Speicher füllen.
+- Verbindungen zu Seraphina, GitHub und HuggingFace: Zertifikate von
+  Zwischenstellen, denen nicht mehr vertraut wird, werden abgelehnt
+  (rustls-webpki, webpki-roots).
+- Weitere Bibliotheken mit bekannten Fehlern aktualisiert (tokio, anyhow,
+  serde_with); eine nicht mehr gepflegte Abhängigkeit entfernt.
+
 ## [0.1.1] – 2026-10-27
 
 Macht die installierten Pakete vollständig nutzbar.

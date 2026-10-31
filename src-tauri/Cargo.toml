@@ -1,6 +1,6 @@
 [package]
 name = "openreader"
-version = "0.1.1"
+version = "0.1.2"
 description = "Wayland-first AI text-to-speech reader for Linux."
 authors = ["OpenReader contributors"]
 license = "Apache-2.0"
