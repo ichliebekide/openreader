@@ -242,7 +242,7 @@ fn attributes(element: &quick_xml::events::BytesStart<'_>) -> Vec<(Vec<u8>, Stri
         .flatten()
         .map(|attribute| {
             let value = attribute
-                .unescape_value()
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                 .map(|value| value.into_owned())
                 .unwrap_or_else(|_| String::from_utf8_lossy(&attribute.value).into_owned());
             (local_name(attribute.key.as_ref()).to_vec(), value)
@@ -621,13 +621,18 @@ mod tests {
 
     /// Minimal valid PDF with correct xref offsets.
     fn write_pdf(path: &Path, content: &str) {
+        write_pdf_with_page_entries(path, "", content);
+    }
+
+    fn write_pdf_with_page_entries(path: &Path, page_entries: &str, content: &str) {
         let stream = content.as_bytes();
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R \
-             /Resources << /Font << /F1 5 0 R >> >> >>"
-                .to_string(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R >> >> {page_entries} >>"
+            ),
             format!("<< /Length {} >>\nstream\n{content}\nendstream", stream.len()),
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
                 .to_string(),
@@ -665,6 +670,19 @@ mod tests {
         let path = dir.path().join("text.pdf");
         write_pdf(&path, "BT /F1 18 Tf 20 50 Td (Hallo PDF Welt.) Tj ET");
         assert_eq!(DocumentService::default().extract_text(&path, "German").unwrap(), "Hallo PDF Welt.");
+    }
+
+    /// RUSTSEC-2026-0187: deep nesting overflowed the stack in lopdf < 0.42,
+    /// which aborts the whole app (catch_unwind cannot stop a stack overflow).
+    #[test]
+    fn deeply_nested_pdf_does_not_overflow_the_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested.pdf");
+        let depth = 100_000;
+        let nested = format!("/Deep {}{}", "[".repeat(depth), "]".repeat(depth));
+        write_pdf_with_page_entries(&path, &nested, "BT /F1 18 Tf 20 50 Td (Hallo) Tj ET");
+        // Either outcome is fine as long as the process survives.
+        let _ = DocumentService::default().extract_text(&path, "German");
     }
 
     /// LibreOffice PDF (embedded subset fonts with ToUnicode), German text in
